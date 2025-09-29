@@ -1,0 +1,8 @@
+Django==5.0
+snowflake-connector-python==3.7.1
+psycopg2-binary==2.9.9
+python-dotenv==1.0.0
+djangorestframework==3.14.0
+pandas==2.1.4
+sqlalchemy==2.0.35
+
