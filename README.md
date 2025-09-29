@@ -1,7 +1,7 @@
 ````markdown
 # Snowflake to PostgreSQL Migration
 
-A Django-based utility to migrate schemas and data from **Snowflake** to **PostgreSQL**.  
+A Django-based utility to migrate schemas and data from **Snowflake** to **PostgreSQL**.
 
 This tool is particularly useful for **cost reduction**, **faster local testing**, and **simplifying analytics pipelines** by moving data from Snowflake (cloud-based) to a more affordable PostgreSQL setup.
 
@@ -9,20 +9,21 @@ This tool is particularly useful for **cost reduction**, **faster local testing*
 
 ## Advantages
 
-- **Cost Cutting:** Reduce reliance on Snowflake for heavy queries and storage.  
-- **Faster Development & Testing:** Work locally with PostgreSQL without hitting Snowflake.  
-- **Data Portability:** Easily transfer schemas and data between environments.  
-- **Selective Migration:** Migrate entire schemas or specific tables.  
+- **Cost Cutting:** Reduce reliance on Snowflake for heavy queries and storage.
+- **Faster Development & Testing:** Work locally with PostgreSQL without hitting Snowflake.
+- **Data Portability:** Easily transfer schemas and data between environments.
+- **Selective Migration:** Migrate entire schemas or specific tables.
 
 ---
 
 ## Pre-requisites
 
-1. **Python Virtual Environment**  
+1. **Python Virtual Environment**
    ```bash
    python -m venv venv
    source venv/bin/activate  # Linux/macOS
    venv\Scripts\activate     # Windows
+   ```
 ````
 
 2. **Install Required Packages**
@@ -143,16 +144,16 @@ python manage.py sf_migrate build --schema N360DEV_PI --output /tmp/preview.sql
 
 ## Migration Performance
 
-* Typical speed: **10,000 - 100,000 rows/second** depending on network and table size.
+- Typical speed: **10,000 - 100,000 rows/second** depending on network and table size.
 
 ---
 
 ## What’s Migrated
 
-* Tables
-* Data
-* Column types
-* Constraints (primary keys, foreign keys)
+- Tables
+- Data
+- Column types
+- Constraints (primary keys, foreign keys)
 
 > **Note:** Views and stored procedures must be migrated manually.
 
@@ -182,6 +183,3 @@ python manage.py sf_migrate --help
 ---
 
 **With this setup, you can quickly migrate data from Snowflake to PostgreSQL, cut costs, and accelerate local development.**
-
-```
-

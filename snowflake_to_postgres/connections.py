@@ -99,10 +99,10 @@ class PostgresConnection:
             )
 
         return {
-            "dbname": db_config["NAME"],  
+            "dbname": db_config["NAME"],
             "user": db_config["USER"],
             "password": db_config["PASSWORD"],
-            "host": db_config["HOST"], 
+            "host": db_config["HOST"],
             "port": db_config.get("PORT", 5432),
         }
 
