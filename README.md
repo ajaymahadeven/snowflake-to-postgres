@@ -1,4 +1,3 @@
-````markdown
 # Snowflake to PostgreSQL Migration
 
 A Django-based utility to migrate schemas and data from **Snowflake** to **PostgreSQL**.
@@ -18,46 +17,47 @@ This tool is particularly useful for **cost reduction**, **faster local testing*
 
 ## Pre-requisites
 
-1. **Python Virtual Environment**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # Linux/macOS
-   venv\Scripts\activate     # Windows
-   ```
-````
+### 1. Python Virtual Environment
 
-2. **Install Required Packages**
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+venv\Scripts\activate     # Windows
+```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 2. Install Required Packages
 
-3. **Configure Environment Variables**
-   Copy `.env.example` to `.env` and fill in your credentials. Example:
+```bash
+pip install -r requirements.txt
+```
 
-   ```env
-   # Django
-   SECRET_KEY=''
-   DEBUG=True
-   ALLOWED_HOSTS=localhost,127.0.0.1
+### 3. Configure Environment Variables
 
-   # Snowflake Credentials
-   SNOWFLAKE_USER=''
-   SNOWFLAKE_PASSWORD=''
-   SNOWFLAKE_ACCOUNT=''
-   SNOWFLAKE_URL=''
-   SNOWFLAKE_DATABASE=''
-   SNOWFLAKE_WAREHOUSE=''
+Copy `.env.example` to `.env` and fill in your credentials. Example:
 
-   # PostgreSQL Credentials
-   POSTGRES_USER=''
-   POSTGRES_PASSWORD=''
-   POSTGRES_HOST=''
-   POSTGRES_PORT=''
-   POSTGRES_DB='data_factory_ops'
-   ```
+```env
+# Django
+SECRET_KEY=''
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
 
-   ⚠️ **Note:** Replace `data_factory_ops` with your own database name everywhere. Ensure both Snowflake and PostgreSQL users have appropriate permissions.
+# Snowflake Credentials
+SNOWFLAKE_USER=''
+SNOWFLAKE_PASSWORD=''
+SNOWFLAKE_ACCOUNT=''
+SNOWFLAKE_URL=''
+SNOWFLAKE_DATABASE=''
+SNOWFLAKE_WAREHOUSE=''
+
+# PostgreSQL Credentials
+POSTGRES_USER=''
+POSTGRES_PASSWORD=''
+POSTGRES_HOST=''
+POSTGRES_PORT=''
+POSTGRES_DB='data_factory_ops'
+```
+
+⚠️ **Note:** Replace `data_factory_ops` with your own database name everywhere. Ensure both Snowflake and PostgreSQL users have appropriate permissions.
 
 ---
 
@@ -148,7 +148,7 @@ python manage.py sf_migrate build --schema N360DEV_PI --output /tmp/preview.sql
 
 ---
 
-## What’s Migrated
+## What's Migrated
 
 - Tables
 - Data
