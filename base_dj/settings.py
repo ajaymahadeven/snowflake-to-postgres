@@ -78,12 +78,35 @@ WSGI_APPLICATION = 'base_dj.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
+USER = os.getenv("POSTGRES_USER", "user")
+PASSWORD = os.getenv("POSTGRES_PASSWORD", "secret")
+PORT = os.getenv("POSTGRES_PORT", "5432")
+HOST = os.getenv("POSTGRES_HOST","local")
+DATABASE_NAME=os.getenv("POSTGRES_DB","ops")
+
+
 DATABASES = {
     "default": {
-        "ENGINE": os.getenv("DB_ENGINE", "django.db.backends.sqlite3"),
-        "NAME": BASE_DIR / os.getenv("DB_NAME", "db.sqlite3"),
+        "ENGINE": "django.db.backends.postgresql_psycopg2",
+        "NAME": 'ops',
+        "USER": USER,
+        "PASSWORD": PASSWORD,
+        "HOST": HOST,
+        "PORT": PORT,
+        "CONN_MAX_AGE": 600,  # Close database connections after 10 minutes (600 seconds) of inactivity
+    },
+    "data_factory_ops": {
+        "ENGINE": "django.db.backends.postgresql_psycopg2",
+        "NAME": DATABASE_NAME,
+        "USER": USER,
+        "PASSWORD": PASSWORD,
+        "HOST": HOST,
+        "PORT": PORT,
+        "CONN_MAX_AGE": 600,  # Close database connections after 10 minutes (600 seconds) of inactivity
     }
+
 }
+
 
 
 
