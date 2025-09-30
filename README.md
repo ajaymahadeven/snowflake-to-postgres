@@ -4,6 +4,8 @@ A Django-based utility to migrate schemas and data from **Snowflake** to **Postg
 
 This tool is particularly useful for **cost reduction**, **faster local testing**, and **simplifying analytics pipelines** by moving data from Snowflake (cloud-based) to a more affordable PostgreSQL setup.
 
+![Snowflake to PostgreSQL Migration](https://raw.githubusercontent.com/ajaymahadeven/snowflake-to-postgres/refs/heads/main/screenshots/snowflake-to-postgres.png)
+
 ---
 
 ## Advantages
