@@ -7,6 +7,8 @@ High-performance bulk data transfer from Snowflake to PostgreSQL.
 import csv
 import io
 import logging
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, List, Optional
@@ -41,6 +43,17 @@ class DataTransferEngine:
         self.batch_size = batch_size
         self.use_copy = use_copy
 
+    def _get_row_count_estimate(self, schema: str, table: str) -> Optional[int]:
+        """Get approximate row count for a table."""
+        query = f'SELECT COUNT(*) as "CNT" FROM {schema}."{table}"'
+        try:
+            with self.sf_conn.cursor() as cursor:
+                cursor.execute(query)
+                result = cursor.fetchone()
+                return result["CNT"] if result else None
+        except Exception:
+            return None
+
     def transfer_table(
         self,
         source_schema: str,
@@ -48,7 +61,9 @@ class DataTransferEngine:
         target_schema: str,
         target_table: Optional[str] = None,
         where_clause: Optional[str] = None,
+        limit: Optional[int] = None,
         progress_callback: Optional[Callable[[int], None]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
     ) -> TransferStats:
         """
         Transfer data from a Snowflake table to PostgreSQL.
@@ -65,19 +80,28 @@ class DataTransferEngine:
             query = f"SELECT {column_list} FROM {source_schema}.{source_table}"
             if where_clause:
                 query += f" WHERE {where_clause}"
+            if limit:
+                query += f" LIMIT {limit}"
 
             logger.info(
                 f"Starting transfer: {source_schema}.{source_table} -> {target_schema}.{target_table}"
             )
 
+            # Show row count estimate
+            if status_callback:
+                status_callback(f"Counting rows in {source_schema}.{source_table}...")
+            row_estimate = self._get_row_count_estimate(source_schema, source_table)
+            if status_callback and row_estimate is not None:
+                status_callback(f"~{row_estimate:,} rows to transfer")
+
             # Transfer data
             if self.use_copy:
                 rows_transferred = self._transfer_using_copy(
-                    query, columns, target_schema, target_table, progress_callback
+                    query, columns, target_schema, target_table, progress_callback, status_callback
                 )
             else:
                 rows_transferred = self._transfer_using_insert(
-                    query, columns, target_schema, target_table, progress_callback
+                    query, columns, target_schema, target_table, progress_callback, status_callback
                 )
 
             end_time = datetime.now()
@@ -120,6 +144,7 @@ class DataTransferEngine:
         target_schema: str,
         target_table: str,
         progress_callback: Optional[Callable[[int], None]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
     ) -> int:
         """Transfer using PostgreSQL COPY protocol for maximum speed."""
         total_rows = 0
@@ -129,7 +154,29 @@ class DataTransferEngine:
         sf_cursor = sf_conn.cursor()
 
         try:
-            sf_cursor.execute(query)
+            if status_callback:
+                status_callback("Querying Snowflake...")
+
+            # Run execute with a timer so the user sees elapsed time
+            stop_ticker = threading.Event()
+
+            def _tick():
+                start = time.time()
+                while not stop_ticker.wait(10):
+                    elapsed = int(time.time() - start)
+                    if status_callback:
+                        status_callback(f"Still waiting for Snowflake... ({elapsed}s elapsed)")
+
+            ticker = threading.Thread(target=_tick, daemon=True)
+            ticker.start()
+            try:
+                sf_cursor.execute(query)
+            finally:
+                stop_ticker.set()
+                ticker.join()
+
+            if status_callback:
+                status_callback("Fetching and inserting rows...")
 
             with self.pg_conn.connection() as pg_conn:
                 pg_cursor = pg_conn.cursor()
@@ -185,6 +232,7 @@ class DataTransferEngine:
         target_schema: str,
         target_table: str,
         progress_callback: Optional[Callable[[int], None]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
     ) -> int:
         """Transfer using batch INSERT statements."""
         total_rows = 0
@@ -194,7 +242,28 @@ class DataTransferEngine:
         sf_cursor = sf_conn.cursor()
 
         try:
-            sf_cursor.execute(query)
+            if status_callback:
+                status_callback("Querying Snowflake...")
+
+            stop_ticker = threading.Event()
+
+            def _tick():
+                start = time.time()
+                while not stop_ticker.wait(10):
+                    elapsed = int(time.time() - start)
+                    if status_callback:
+                        status_callback(f"Still waiting for Snowflake... ({elapsed}s elapsed)")
+
+            ticker = threading.Thread(target=_tick, daemon=True)
+            ticker.start()
+            try:
+                sf_cursor.execute(query)
+            finally:
+                stop_ticker.set()
+                ticker.join()
+
+            if status_callback:
+                status_callback("Fetching and inserting rows...")
 
             with self.pg_conn.connection() as pg_conn:
                 pg_cursor = pg_conn.cursor()
@@ -250,7 +319,11 @@ class DataTransferEngine:
         source_schema: str,
         target_schema: str,
         table_filter: Optional[List[str]] = None,
+        where_clause: Optional[str] = None,
+        limit: Optional[int] = None,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        row_progress_callback: Optional[Callable[[int], None]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
     ) -> List[TransferStats]:
         """
         Transfer all tables in a schema.
@@ -272,6 +345,10 @@ class DataTransferEngine:
                 source_schema=source_schema,
                 source_table=table,
                 target_schema=target_schema,
+                where_clause=where_clause,
+                limit=limit,
+                progress_callback=row_progress_callback,
+                status_callback=status_callback,
             )
             stats_list.append(stats)
 

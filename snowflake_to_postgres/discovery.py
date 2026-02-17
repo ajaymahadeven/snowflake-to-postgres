@@ -101,21 +101,27 @@ class SnowflakeSchemaDiscovery:
 
     def __init__(self, connection):
         self.conn = connection
+        self._constraint_warning_shown = False
 
-    def discover_schema(self, schema_name: str) -> Schema:
+    def discover_schema(
+        self, schema_name: str, table_filter: Optional[str] = None
+    ) -> Schema:
         """
         Discover complete schema metadata from Snowflake.
 
         Args:
             schema_name: Name of the schema to discover
+            table_filter: If provided, only discover this specific table
 
         Returns:
             Schema object with all metadata
         """
         schema = Schema(name=schema_name, database=self.conn.config["database"])
 
-        # Get all tables
+        # Get tables (filtered if specified)
         tables = self._get_tables(schema_name)
+        if table_filter:
+            tables = [t for t in tables if t == table_filter]
 
         for table_name in tables:
             table = Table(name=table_name, schema=schema_name)
@@ -143,19 +149,19 @@ class SnowflakeSchemaDiscovery:
 
             schema.tables.append(table)
 
-        # Get views with definitions
-        view_names = self._get_views(schema_name)
-        for view_name in view_names:
-            view_ddl = self._get_view_definition(schema_name, view_name)
-            schema.views.append(View(name=view_name, ddl=view_ddl))
+        # Skip views and procedures when filtering by specific table
+        if not table_filter:
+            # Get views with definitions
+            view_names = self._get_views(schema_name)
+            for view_name in view_names:
+                view_ddl = self._get_view_definition(schema_name, view_name)
+                schema.views.append(View(name=view_name, ddl=view_ddl))
 
-        # Get procedures with definitions
-        procedure_names = self._get_procedures(schema_name)
-        for proc_name in procedure_names:
-            proc_ddl = self._get_procedure_definition(schema_name, proc_name)
-            schema.procedures.append(Procedure(name=proc_name, ddl=proc_ddl))
-
-        return schema
+            # Get procedures with definitions
+            procedure_names = self._get_procedures(schema_name)
+            for proc_name in procedure_names:
+                proc_ddl = self._get_procedure_definition(schema_name, proc_name)
+                schema.procedures.append(Procedure(name=proc_name, ddl=proc_ddl))
 
         return schema
 
@@ -250,13 +256,15 @@ class SnowflakeSchemaDiscovery:
 
                 constraints.extend(constraint_map.values())
         except Exception as e:
-            # If KEY_COLUMN_USAGE is not available, just skip constraints
-            import logging
+            if not self._constraint_warning_shown:
+                import logging
 
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                f"Could not fetch constraints for {schema_name}.{table_name}: {e}"
-            )
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"Could not fetch constraints (INFORMATION_SCHEMA.KEY_COLUMN_USAGE "
+                    f"not accessible). Constraints will be skipped."
+                )
+                self._constraint_warning_shown = True
 
         # Try to get foreign keys
         try:
@@ -297,14 +305,9 @@ class SnowflakeSchemaDiscovery:
                     )
 
                 constraints.extend(fk_map.values())
-        except Exception as e:
-            # If foreign keys are not available, just skip
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                f"Could not fetch foreign keys for {schema_name}.{table_name}: {e}"
-            )
+        except Exception:
+            # Already warned about KEY_COLUMN_USAGE above; silently skip FK fetch
+            pass
 
         return constraints
 

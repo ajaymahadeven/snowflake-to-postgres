@@ -89,6 +89,20 @@ Examples:
             help="Batch size for data transfer (default: 10000)",
         )
 
+        # WHERE clause for filtering data
+        parser.add_argument(
+            "--where",
+            type=str,
+            help='SQL WHERE clause to filter rows (e.g., --where "DATE >= \'2025-01-01\'")',
+        )
+
+        # LIMIT for testing
+        parser.add_argument(
+            "--limit",
+            type=int,
+            help="Limit number of rows to transfer (useful for testing)",
+        )
+
         # Dry run mode
         parser.add_argument(
             "--dry-run",
@@ -171,9 +185,10 @@ Examples:
         )
 
         # Discover schema
+        table_filter = options.get("table")
         with SnowflakeConnection() as sf_conn:
             discovery = SnowflakeSchemaDiscovery(sf_conn)
-            schema = discovery.discover_schema(source_schema)
+            schema = discovery.discover_schema(source_schema, table_filter=table_filter)
 
         # Generate DDL
         generator = PostgresDDLGenerator()
@@ -314,10 +329,16 @@ Examples:
         db_alias = options["db"]
         batch_size = options["batch_size"]
         table_filter = [options["table"]] if options.get("table") else None
+        where_clause = options.get("where")
+        limit = options.get("limit")
 
         self.stdout.write(
             self.style.WARNING(f"Transferring data: {source_schema} -> {target_schema}")
         )
+        if where_clause:
+            self.stdout.write(f"  WHERE: {where_clause}")
+        if limit:
+            self.stdout.write(f"  LIMIT: {limit:,}")
 
         with SnowflakeConnection() as sf_conn, PostgresConnection(db_alias) as pg_conn:
             transfer_engine = DataTransferEngine(
@@ -328,7 +349,11 @@ Examples:
                 source_schema=source_schema,
                 target_schema=target_schema,
                 table_filter=table_filter,
+                where_clause=where_clause,
+                limit=limit,
                 progress_callback=self._create_transfer_progress_callback(),
+                row_progress_callback=self._create_row_progress_callback(),
+                status_callback=self._create_status_callback(),
             )
 
             self._display_transfer_stats(stats_list)
@@ -415,6 +440,24 @@ Examples:
 
         def callback(table_name, current, total):
             self.stdout.write(f"  [{current}/{total}] Transferring: {table_name}")
+
+        return callback
+
+    def _create_row_progress_callback(self):
+        """Create progress callback for per-batch row progress."""
+
+        def callback(rows_so_far):
+            self.stdout.write(f"    {rows_so_far:,} rows transferred so far...")
+            self.stdout.flush()
+
+        return callback
+
+    def _create_status_callback(self):
+        """Create callback for status messages during transfer."""
+
+        def callback(message):
+            self.stdout.write(f"    {message}")
+            self.stdout.flush()
 
         return callback
 

@@ -110,11 +110,14 @@ python manage.py sf_migrate destroy --target TARGET_SCHEMA --force
 ## Options
 
 ```bash
---table TABLE_NAME        # Migrate or transfer a single table only
+--table TABLE_NAME        # Migrate, build, or transfer a single table only
 --batch-size 50000        # Larger batch = faster migration
+--where "COLUMN > 'val'"  # Filter rows with a SQL WHERE clause
+--limit 10000             # Limit number of rows transferred (useful for testing)
 --dry-run                 # Preview without executing
 --output file.sql         # Save DDL to file
 --force                   # Skip confirmation prompts
+--continue-on-error       # Continue processing even if errors occur
 ```
 
 ---
@@ -137,6 +140,12 @@ python manage.py sf_migrate build --schema N360DEV_PI --target n360dev_pi --tabl
 
 # Transfer a single table
 python manage.py sf_migrate transfer --schema N360DEV_PI --target n360dev_pi --table CUSTOMERS
+
+# Transfer with a WHERE filter (useful for large tables)
+python manage.py sf_migrate transfer --schema N360DEV_PI --target n360dev_pi --table TRANSACTIONS --where "CREATED_DATE >= '2025-01-01'"
+
+# Test transfer with a row limit
+python manage.py sf_migrate transfer --schema N360DEV_PI --target n360dev_pi --table TRANSACTIONS --limit 1000
 
 # Preview DDL before executing
 python manage.py sf_migrate build --schema N360DEV_PI --output /tmp/preview.sql
