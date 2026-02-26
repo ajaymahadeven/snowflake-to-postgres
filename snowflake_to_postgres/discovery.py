@@ -125,6 +125,7 @@ class SnowflakeSchemaDiscovery:
             tables = [t for t in tables if t.upper() == table_filter_upper]
             if not tables:
                 import logging
+
                 logger = logging.getLogger(__name__)
                 logger.warning(
                     f"Table '{table_filter}' not found in schema '{schema_name}'. "
@@ -260,10 +261,12 @@ class SnowflakeSchemaDiscovery:
                         constraint_map[constraint_name] = Constraint(
                             name=constraint_name, type=constraint_type, columns=[]
                         )
-                    constraint_map[constraint_name].columns.append(row["COLUMN_NAME"].lower())
+                    constraint_map[constraint_name].columns.append(
+                        row["COLUMN_NAME"].lower()
+                    )
 
                 constraints.extend(constraint_map.values())
-        except Exception as e:
+        except Exception:
             if not self._constraint_warning_shown:
                 import logging
 

@@ -109,13 +109,13 @@ python manage.py sf_migrate destroy --target TARGET_SCHEMA --force
 
 Check data integrity after a transfer. Compares Snowflake (source) against PostgreSQL (target) across multiple layers:
 
-| Layer | Check | What it catches |
-|-------|-------|-----------------|
-| 1 | Total row count | Missing batches, truncated transfers |
-| 2 | Per-partition row counts (grouped by date) | Entire days missing, duplicate rows |
-| 3 | NULL counts + MIN/MAX per column | Introduced NULLs, precision loss, type truncation |
-| 4 | Aggregate sums of numeric columns per day | Corrupted values, floating-point errors |
-| 5 | Row-level sample comparison (opt-in) | Field-level corruption, requires a primary key |
+| Layer | Check                                      | What it catches                                   |
+| ----- | ------------------------------------------ | ------------------------------------------------- |
+| 1     | Total row count                            | Missing batches, truncated transfers              |
+| 2     | Per-partition row counts (grouped by date) | Entire days missing, duplicate rows               |
+| 3     | NULL counts + MIN/MAX per column           | Introduced NULLs, precision loss, type truncation |
+| 4     | Aggregate sums of numeric columns per day  | Corrupted values, floating-point errors           |
+| 5     | Row-level sample comparison (opt-in)       | Field-level corruption, requires a primary key    |
 
 Layers 1–4 run by default. Layer 5 is enabled with `--sample-size`.
 

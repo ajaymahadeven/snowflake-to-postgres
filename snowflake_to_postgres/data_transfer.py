@@ -97,11 +97,21 @@ class DataTransferEngine:
             # Transfer data
             if self.use_copy:
                 rows_transferred = self._transfer_using_copy(
-                    query, columns, target_schema, target_table, progress_callback, status_callback
+                    query,
+                    columns,
+                    target_schema,
+                    target_table,
+                    progress_callback,
+                    status_callback,
                 )
             else:
                 rows_transferred = self._transfer_using_insert(
-                    query, columns, target_schema, target_table, progress_callback, status_callback
+                    query,
+                    columns,
+                    target_schema,
+                    target_table,
+                    progress_callback,
+                    status_callback,
                 )
 
             end_time = datetime.now()
@@ -165,7 +175,9 @@ class DataTransferEngine:
                 while not stop_ticker.wait(10):
                     elapsed = int(time.time() - start)
                     if status_callback:
-                        status_callback(f"Still waiting for Snowflake... ({elapsed}s elapsed)")
+                        status_callback(
+                            f"Still waiting for Snowflake... ({elapsed}s elapsed)"
+                        )
 
             ticker = threading.Thread(target=_tick, daemon=True)
             ticker.start()
@@ -252,7 +264,9 @@ class DataTransferEngine:
                 while not stop_ticker.wait(10):
                     elapsed = int(time.time() - start)
                     if status_callback:
-                        status_callback(f"Still waiting for Snowflake... ({elapsed}s elapsed)")
+                        status_callback(
+                            f"Still waiting for Snowflake... ({elapsed}s elapsed)"
+                        )
 
             ticker = threading.Thread(target=_tick, daemon=True)
             ticker.start()

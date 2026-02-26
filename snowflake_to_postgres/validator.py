@@ -9,7 +9,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +124,7 @@ class DataValidator:
         # Layer 3: column-level stats
         self._status("  Layer 3: Column statistics...")
         result.checks.extend(
-            self._check_column_stats(
-                sf_schema, sf_table, pg_schema, pg_table, columns
-            )
+            self._check_column_stats(sf_schema, sf_table, pg_schema, pg_table, columns)
         )
 
         # Layer 4: aggregate fingerprint
@@ -156,9 +154,7 @@ class DataValidator:
     # Layer implementations
     # ------------------------------------------------------------------
 
-    def _check_row_count(
-        self, sf_schema, sf_table, pg_schema, pg_table
-    ) -> CheckResult:
+    def _check_row_count(self, sf_schema, sf_table, pg_schema, pg_table) -> CheckResult:
         sf_count = self._sf_scalar(
             f"SELECT COUNT(*) as CNT FROM {sf_schema}.{sf_table}", "CNT"
         )
@@ -274,9 +270,7 @@ class DataValidator:
                 sf_val = self._norm_decimal(sf_row.get(i))
                 pg_val = self._norm_decimal(pg_row.get(i))
                 if sf_val != pg_val:
-                    mismatches.append(
-                        f"  {d} / {col}: SF={sf_val}  PG={pg_val}"
-                    )
+                    mismatches.append(f"  {d} / {col}: SF={sf_val}  PG={pg_val}")
                     if len(mismatches) >= 30:
                         break
             if len(mismatches) >= 30:
@@ -329,12 +323,12 @@ class DataValidator:
                 continue
             for col in columns:
                 col_lower = col["name"].lower()
-                sf_val = self._norm_val(
-                    sf_row.get(col["name"], sf_row.get(col_lower))
-                )
+                sf_val = self._norm_val(sf_row.get(col["name"], sf_row.get(col_lower)))
                 pg_val = self._norm_val(pg_row.get(col_lower))
                 if sf_val != pg_val:
-                    pk_info = {pk: sf_row.get(pk, sf_row.get(pk.lower())) for pk in pk_cols}
+                    pk_info = {
+                        pk: sf_row.get(pk, sf_row.get(pk.lower())) for pk in pk_cols
+                    }
                     mismatches.append(
                         f"  pk={pk_info} col={col_lower}: SF={sf_val!r}  PG={pg_val!r}"
                     )
@@ -454,7 +448,10 @@ class DataValidator:
             chunk = columns[chunk_start : chunk_start + self._NULL_CHUNK]
 
             sf_exprs = ", ".join(
-                [f'COUNT(*) - COUNT("{c["name"]}") as N{i}' for i, c in enumerate(chunk)]
+                [
+                    f'COUNT(*) - COUNT("{c["name"]}") as N{i}'
+                    for i, c in enumerate(chunk)
+                ]
             )
             pg_exprs = ", ".join(
                 [
@@ -608,9 +605,19 @@ class DataValidator:
 
     def _get_numeric_columns(self, columns: List[Dict]) -> List[str]:
         numeric_types = {
-            "NUMBER", "NUMERIC", "DECIMAL",
-            "FLOAT", "FLOAT4", "FLOAT8", "DOUBLE", "REAL",
-            "INTEGER", "INT", "BIGINT", "SMALLINT", "TINYINT",
+            "NUMBER",
+            "NUMERIC",
+            "DECIMAL",
+            "FLOAT",
+            "FLOAT4",
+            "FLOAT8",
+            "DOUBLE",
+            "REAL",
+            "INTEGER",
+            "INT",
+            "BIGINT",
+            "SMALLINT",
+            "TINYINT",
         }
         return [
             col["name"]
@@ -620,10 +627,24 @@ class DataValidator:
 
     def _is_numeric_or_date(self, data_type: str) -> bool:
         checkable = {
-            "NUMBER", "NUMERIC", "DECIMAL",
-            "FLOAT", "FLOAT4", "FLOAT8", "DOUBLE", "REAL",
-            "INTEGER", "INT", "BIGINT", "SMALLINT", "TINYINT",
-            "DATE", "TIMESTAMP", "TIMESTAMP_NTZ", "TIMESTAMP_LTZ", "TIMESTAMP_TZ",
+            "NUMBER",
+            "NUMERIC",
+            "DECIMAL",
+            "FLOAT",
+            "FLOAT4",
+            "FLOAT8",
+            "DOUBLE",
+            "REAL",
+            "INTEGER",
+            "INT",
+            "BIGINT",
+            "SMALLINT",
+            "TINYINT",
+            "DATE",
+            "TIMESTAMP",
+            "TIMESTAMP_NTZ",
+            "TIMESTAMP_LTZ",
+            "TIMESTAMP_TZ",
         }
         return data_type.upper().split("(")[0] in checkable
 

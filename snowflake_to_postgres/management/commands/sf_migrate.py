@@ -11,9 +11,9 @@ from django.core.management.base import BaseCommand, CommandError
 from ...connections import PostgresConnection, SnowflakeConnection
 from ...data_transfer import DataTransferEngine
 from ...discovery import SnowflakeSchemaDiscovery
-from ...validator import DataValidator
 from ...executor import PostgresDDLExecutor
 from ...translator import PostgresDDLGenerator
+from ...validator import DataValidator
 from ...view_procedure_translator import (
     SnowflakeProcedureTranslator,
     SnowflakeViewTranslator,
@@ -97,7 +97,7 @@ Examples:
         parser.add_argument(
             "--where",
             type=str,
-            help='SQL WHERE clause to filter rows (e.g., --where "DATE >= \'2025-01-01\'")',
+            help="SQL WHERE clause to filter rows (e.g., --where \"DATE >= '2025-01-01'\")",
         )
 
         # LIMIT for testing
@@ -224,10 +224,12 @@ Examples:
 
             real_count = sum(1 for s in ddl_statements if s.strip())
             if real_count == 0:
-                self.stdout.write(self.style.WARNING(
-                    "No DDL statements to execute. "
-                    "Check that the schema and table name are correct."
-                ))
+                self.stdout.write(
+                    self.style.WARNING(
+                        "No DDL statements to execute. "
+                        "Check that the schema and table name are correct."
+                    )
+                )
                 return
 
             self.stdout.write(f"Executing {real_count} DDL statements...")
