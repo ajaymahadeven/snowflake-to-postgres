@@ -11,6 +11,7 @@ from django.core.management.base import BaseCommand, CommandError
 from ...connections import PostgresConnection, SnowflakeConnection
 from ...data_transfer import DataTransferEngine
 from ...discovery import SnowflakeSchemaDiscovery
+from ...validator import DataValidator
 from ...executor import PostgresDDLExecutor
 from ...translator import PostgresDDLGenerator
 from ...view_procedure_translator import (
@@ -36,6 +37,8 @@ Examples:
     python manage.py sf_migrate destroy --target endeavour_staging
     python manage.py sf_migrate migrate --schema ENDEAVOUR_STAGING --target endeavour_staging
     python manage.py sf_migrate transfer --schema ENDEAVOUR_STAGING --target endeavour_staging --table MY_TABLE
+    python manage.py sf_migrate validate --schema ENDEAVOUR_STAGING --target endeavour_staging
+    python manage.py sf_migrate validate --schema ENDEAVOUR_STAGING --target endeavour_staging --table MY_TABLE --sample-size 10000
     """
 
     def add_arguments(self, parser):
@@ -50,6 +53,7 @@ Examples:
                 "destroy",
                 "migrate",
                 "transfer",
+                "validate",
             ],
             help="Action to perform",
         )
@@ -136,6 +140,18 @@ Examples:
             help="Continue processing even if errors occur",
         )
 
+        # Sample size for validate Layer 5 (row-level comparison)
+        parser.add_argument(
+            "--sample-size",
+            type=int,
+            default=0,
+            help=(
+                "Number of rows to sample for row-level comparison during validate "
+                "(Layer 5). Requires a primary key on the source table. "
+                "Default: 0 (skipped)."
+            ),
+        )
+
     def handle(self, *args, **options):
         action = options["action"]
 
@@ -152,6 +168,8 @@ Examples:
                 self.handle_migrate(options)
             elif action == "transfer":
                 self.handle_transfer(options)
+            elif action == "validate":
+                self.handle_validate(options)
 
         except Exception as e:
             raise CommandError(f"Error during {action}: {str(e)}")
@@ -204,7 +222,15 @@ Examples:
         with PostgresConnection(db_alias) as pg_conn:
             executor = PostgresDDLExecutor(pg_conn, dry_run=dry_run)
 
-            self.stdout.write(f"Executing {len(ddl_statements)} DDL statements...")
+            real_count = sum(1 for s in ddl_statements if s.strip())
+            if real_count == 0:
+                self.stdout.write(self.style.WARNING(
+                    "No DDL statements to execute. "
+                    "Check that the schema and table name are correct."
+                ))
+                return
+
+            self.stdout.write(f"Executing {real_count} DDL statements...")
 
             result = executor.execute_ddl(
                 ddl_statements,
@@ -357,6 +383,109 @@ Examples:
             )
 
             self._display_transfer_stats(stats_list)
+
+    def handle_validate(self, options):
+        """Validate data integrity between Snowflake and PostgreSQL."""
+        source_schema = self._get_required_option(options, "schema")
+        target_schema = options.get("target") or source_schema.lower()
+        db_alias = options["db"]
+        table_name = options.get("table")
+        sample_size = options.get("sample_size", 0)
+
+        self.stdout.write(
+            self.style.WARNING(f"Validating: {source_schema} -> {target_schema}")
+        )
+        if sample_size:
+            self.stdout.write(f"  Row sample size: {sample_size:,} (Layer 5 enabled)")
+
+        with SnowflakeConnection() as sf_conn, PostgresConnection(db_alias) as pg_conn:
+            validator = DataValidator(
+                sf_conn,
+                pg_conn,
+                sample_size=sample_size,
+                status_callback=self._create_status_callback(),
+            )
+
+            if table_name:
+                tables = [table_name.upper()]
+            else:
+                # Lightweight table list — no COUNT(*) like discover_schema does
+                with sf_conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT TABLE_NAME
+                        FROM INFORMATION_SCHEMA.TABLES
+                        WHERE TABLE_SCHEMA = %s AND TABLE_TYPE = 'BASE TABLE'
+                        ORDER BY TABLE_NAME
+                        """,
+                        (source_schema,),
+                    )
+                    tables = [row["TABLE_NAME"] for row in cur.fetchall()]
+
+            total = len(tables)
+            results = []
+            for i, table in enumerate(tables, 1):
+                self.stdout.write(
+                    self.style.HTTP_INFO(f"\n  [{i}/{total}] {table.lower()}")
+                )
+                result = validator.validate_table(
+                    sf_schema=source_schema,
+                    sf_table=table,
+                    pg_schema=target_schema,
+                    pg_table=table.lower(),
+                )
+                results.append(result)
+
+            self._display_validation_results(results)
+
+    def _display_validation_results(self, results):
+        """Display validation results summary."""
+        all_passed = all(r.passed for r in results)
+        total_checks = sum(len(r.checks) for r in results)
+        failed_checks = sum(len(r.failed_checks) for r in results)
+
+        if all_passed:
+            self.stdout.write(self.style.SUCCESS("\n=== Validation Complete ==="))
+        else:
+            self.stdout.write(self.style.ERROR("\n=== Validation FAILED ==="))
+
+        for result in results:
+            table_status = (
+                self.style.SUCCESS("✓") if result.passed else self.style.ERROR("✗")
+            )
+            self.stdout.write(
+                f"\n{table_status} {result.table_name}  ({result.duration:.1f}s)"
+            )
+            for check in result.checks:
+                if check.passed is None:
+                    icon = self.style.WARNING("  ⚠")
+                elif check.passed:
+                    icon = self.style.SUCCESS("  ✓")
+                else:
+                    icon = self.style.ERROR("  ✗")
+                self.stdout.write(f"{icon} {check.name}: {check.message}")
+                if check.details:
+                    for detail in check.details[:10]:
+                        self.stdout.write(f"      {detail}")
+                    if len(check.details) > 10:
+                        self.stdout.write(
+                            f"      ... and {len(check.details) - 10} more"
+                        )
+
+        self.stdout.write(f"\nTables validated : {len(results)}")
+        self.stdout.write(f"Checks run       : {total_checks}")
+        self.stdout.write(f"Checks failed    : {failed_checks}")
+
+        if all_passed:
+            self.stdout.write(
+                self.style.SUCCESS("\nAll checks passed. Data integrity confirmed.")
+            )
+        else:
+            self.stdout.write(
+                self.style.ERROR(
+                    f"\n{failed_checks} check(s) failed. Review output above."
+                )
+            )
 
     def _get_required_option(self, options, key):
         """Get required option or raise error."""
