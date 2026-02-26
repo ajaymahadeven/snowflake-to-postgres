@@ -56,6 +56,7 @@ class PostgresDDLExecutor:
 
         if self.dry_run:
             logger.info("DRY RUN MODE - No statements will be executed")
+            statements = [s for s in statements if s.strip()]
             for i, stmt in enumerate(statements, 1):
                 if progress_callback:
                     progress_callback(i, len(statements), stmt[:100])
@@ -76,12 +77,11 @@ class PostgresDDLExecutor:
             conn.autocommit = False
             cursor = conn.cursor()
 
+            # Filter empty statements so progress counts and totals are accurate
+            statements = [s for s in statements if s.strip()]
+
             try:
                 for i, statement in enumerate(statements, 1):
-                    # Skip empty statements
-                    if not statement.strip():
-                        continue
-
                     if progress_callback:
                         progress_callback(i, len(statements), statement[:100])
 
