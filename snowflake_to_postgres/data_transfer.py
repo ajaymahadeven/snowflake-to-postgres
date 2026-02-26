@@ -45,7 +45,7 @@ class DataTransferEngine:
 
     def _get_row_count_estimate(self, schema: str, table: str) -> Optional[int]:
         """Get approximate row count for a table."""
-        query = f'SELECT COUNT(*) as "CNT" FROM {schema}."{table}"'
+        query = f'SELECT COUNT(*) as "CNT" FROM {schema}.{table}'
         try:
             with self.sf_conn.cursor() as cursor:
                 cursor.execute(query)
@@ -202,7 +202,7 @@ class DataTransferEngine:
 
                     # Use COPY to load data
                     buffer.seek(0)
-                    column_list = ", ".join([f'"{col}"' for col in columns])
+                    column_list = ", ".join([f'"{col.lower()}"' for col in columns])
                     copy_sql = f'COPY {target_schema}."{target_table}" ({column_list}) FROM STDIN WITH CSV'
 
                     pg_cursor.copy_expert(copy_sql, buffer)
@@ -275,7 +275,7 @@ class DataTransferEngine:
                         break
 
                     # Build batch INSERT
-                    column_list = ", ".join([f'"{col}"' for col in columns])
+                    column_list = ", ".join([f'"{col.lower()}"' for col in columns])
                     placeholders = ", ".join(["%s"] * len(columns))
                     insert_sql = f'INSERT INTO {target_schema}."{target_table}" ({column_list}) VALUES ({placeholders})'
 
@@ -301,12 +301,12 @@ class DataTransferEngine:
         return total_rows
 
     def _get_columns(self, schema: str, table: str) -> List[str]:
-        """Get column names for a table."""
+        """Get column names for a table. Returns names in their original Snowflake case."""
         query = """
         SELECT COLUMN_NAME
         FROM INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_SCHEMA = %s
-        AND TABLE_NAME = %s
+        AND TABLE_NAME = UPPER(%s)
         ORDER BY ORDINAL_POSITION
         """
 
@@ -332,7 +332,8 @@ class DataTransferEngine:
         tables = self._get_tables(source_schema)
 
         if table_filter:
-            tables = [t for t in tables if t in table_filter]
+            table_filter_lower = [t.lower() for t in table_filter]
+            tables = [t for t in tables if t in table_filter_lower]
 
         stats_list = []
         total_tables = len(tables)
@@ -366,4 +367,4 @@ class DataTransferEngine:
 
         with self.sf_conn.cursor() as cursor:
             cursor.execute(query, (schema,))
-            return [row["TABLE_NAME"] for row in cursor.fetchall()]
+            return [row["TABLE_NAME"].lower() for row in cursor.fetchall()]
