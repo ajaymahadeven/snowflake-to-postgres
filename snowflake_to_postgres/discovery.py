@@ -121,10 +121,18 @@ class SnowflakeSchemaDiscovery:
         # Get tables (filtered if specified)
         tables = self._get_tables(schema_name)
         if table_filter:
-            tables = [t for t in tables if t == table_filter]
+            table_filter_upper = table_filter.upper()
+            tables = [t for t in tables if t.upper() == table_filter_upper]
+            if not tables:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"Table '{table_filter}' not found in schema '{schema_name}'. "
+                    f"No tables will be processed."
+                )
 
         for table_name in tables:
-            table = Table(name=table_name, schema=schema_name)
+            table = Table(name=table_name.lower(), schema=schema_name.lower())
 
             # Get columns
             table.columns = self._get_columns(schema_name, table_name)
@@ -202,7 +210,7 @@ class SnowflakeSchemaDiscovery:
             for row in cur.fetchall():
                 columns.append(
                     Column(
-                        name=row["COLUMN_NAME"],
+                        name=row["COLUMN_NAME"].lower(),
                         data_type=row["DATA_TYPE"],
                         is_nullable=row["IS_NULLABLE"] == "YES",
                         default_value=row["COLUMN_DEFAULT"],
@@ -242,7 +250,7 @@ class SnowflakeSchemaDiscovery:
             with self.conn.cursor() as cur:
                 cur.execute(query, (schema_name, table_name))
                 for row in cur.fetchall():
-                    constraint_name = row["CONSTRAINT_NAME"]
+                    constraint_name = row["CONSTRAINT_NAME"].lower()
                     if constraint_name not in constraint_map:
                         constraint_type = (
                             ConstraintType.PRIMARY_KEY
@@ -252,7 +260,7 @@ class SnowflakeSchemaDiscovery:
                         constraint_map[constraint_name] = Constraint(
                             name=constraint_name, type=constraint_type, columns=[]
                         )
-                    constraint_map[constraint_name].columns.append(row["COLUMN_NAME"])
+                    constraint_map[constraint_name].columns.append(row["COLUMN_NAME"].lower())
 
                 constraints.extend(constraint_map.values())
         except Exception as e:
@@ -290,18 +298,18 @@ class SnowflakeSchemaDiscovery:
             with self.conn.cursor() as cur:
                 cur.execute(fk_query, (schema_name, table_name))
                 for row in cur.fetchall():
-                    constraint_name = row["CONSTRAINT_NAME"]
+                    constraint_name = row["CONSTRAINT_NAME"].lower()
                     if constraint_name not in fk_map:
                         fk_map[constraint_name] = Constraint(
                             name=constraint_name,
                             type=ConstraintType.FOREIGN_KEY,
                             columns=[],
-                            referenced_table=row["REFERENCED_TABLE_NAME"],
+                            referenced_table=row["REFERENCED_TABLE_NAME"].lower(),
                             referenced_columns=[],
                         )
-                    fk_map[constraint_name].columns.append(row["COLUMN_NAME"])
+                    fk_map[constraint_name].columns.append(row["COLUMN_NAME"].lower())
                     fk_map[constraint_name].referenced_columns.append(
-                        row["REFERENCED_COLUMN_NAME"]
+                        row["REFERENCED_COLUMN_NAME"].lower()
                     )
 
                 constraints.extend(fk_map.values())
@@ -345,7 +353,7 @@ class SnowflakeSchemaDiscovery:
         """
         with self.conn.cursor() as cur:
             cur.execute(query, (schema_name,))
-            return [row["TABLE_NAME"] for row in cur.fetchall()]
+            return [row["TABLE_NAME"].lower() for row in cur.fetchall()]
 
     def _get_view_definition(self, schema_name: str, view_name: str) -> Optional[str]:
         """Get view DDL definition."""
@@ -398,7 +406,7 @@ class SnowflakeSchemaDiscovery:
         try:
             with self.conn.cursor() as cur:
                 cur.execute(query, (schema_name,))
-                return [row["PROCEDURE_NAME"] for row in cur.fetchall()]
+                return [row["PROCEDURE_NAME"].lower() for row in cur.fetchall()]
         except Exception as e:
             import logging
 
