@@ -105,15 +105,41 @@ Delete a schema and all its tables in PostgreSQL.
 python manage.py sf_migrate destroy --target TARGET_SCHEMA --force
 ```
 
+### validate
+
+Check data integrity after a transfer. Compares Snowflake (source) against PostgreSQL (target) across multiple layers:
+
+| Layer | Check | What it catches |
+|-------|-------|-----------------|
+| 1 | Total row count | Missing batches, truncated transfers |
+| 2 | Per-partition row counts (grouped by date) | Entire days missing, duplicate rows |
+| 3 | NULL counts + MIN/MAX per column | Introduced NULLs, precision loss, type truncation |
+| 4 | Aggregate sums of numeric columns per day | Corrupted values, floating-point errors |
+| 5 | Row-level sample comparison (opt-in) | Field-level corruption, requires a primary key |
+
+Layers 1–4 run by default. Layer 5 is enabled with `--sample-size`.
+
+```bash
+# Validate an entire schema
+python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHEMA
+
+# Validate a single table
+python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHEMA --table TABLE_NAME
+
+# Include row-level sampling (Layer 5) — requires a primary key on the table
+python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHEMA --table TABLE_NAME --sample-size 10000
+```
+
 ---
 
 ## Options
 
 ```bash
---table TABLE_NAME        # Migrate, build, or transfer a single table only
+--table TABLE_NAME        # Migrate, build, transfer, or validate a single table only
 --batch-size 50000        # Larger batch = faster migration
 --where "COLUMN > 'val'"  # Filter rows with a SQL WHERE clause
 --limit 10000             # Limit number of rows transferred (useful for testing)
+--sample-size 10000       # Row sample size for validate Layer 5 (default: 0 = skipped)
 --dry-run                 # Preview without executing
 --output file.sql         # Save DDL to file
 --force                   # Skip confirmation prompts
@@ -149,6 +175,15 @@ python manage.py sf_migrate transfer --schema N360DEV_PI --target n360dev_pi --t
 
 # Preview DDL before executing
 python manage.py sf_migrate build --schema N360DEV_PI --output /tmp/preview.sql
+
+# Validate entire schema after transfer
+python manage.py sf_migrate validate --schema N360DEV_PI --target n360dev_pi
+
+# Validate a single large table
+python manage.py sf_migrate validate --schema N360DEV_PI --target n360dev_pi --table TRANSACTIONS
+
+# Validate with row-level sampling
+python manage.py sf_migrate validate --schema N360DEV_PI --target n360dev_pi --table TRANSACTIONS --sample-size 10000
 ```
 
 ---
@@ -172,7 +207,17 @@ python manage.py sf_migrate build --schema N360DEV_PI --output /tmp/preview.sql
 
 ## Verify Migration
 
-Connect to PostgreSQL and inspect tables:
+Use the built-in `validate` command to confirm all records transferred correctly:
+
+```bash
+# Quick check — row counts, partition counts, column stats, aggregate sums
+python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHEMA
+
+# Deep check — add row-level sampling (requires a primary key)
+python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHEMA --sample-size 10000
+```
+
+Or connect to PostgreSQL directly to inspect:
 
 ```bash
 python manage.py dbshell --database data_factory_ops
