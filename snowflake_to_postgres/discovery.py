@@ -104,7 +104,10 @@ class SnowflakeSchemaDiscovery:
         self._constraint_warning_shown = False
 
     def discover_schema(
-        self, schema_name: str, table_filter: Optional[str] = None
+        self,
+        schema_name: str,
+        table_filter: Optional[str] = None,
+        status_callback=None,
     ) -> Schema:
         """
         Discover complete schema metadata from Snowflake.
@@ -112,11 +115,16 @@ class SnowflakeSchemaDiscovery:
         Args:
             schema_name: Name of the schema to discover
             table_filter: If provided, only discover this specific table
+            status_callback: Optional callable(message) for progress reporting
 
         Returns:
             Schema object with all metadata
         """
         schema = Schema(name=schema_name, database=self.conn.config["database"])
+
+        def _status(msg):
+            if status_callback:
+                status_callback(msg)
 
         # Get tables (filtered if specified)
         tables = self._get_tables(schema_name)
@@ -132,13 +140,19 @@ class SnowflakeSchemaDiscovery:
                     f"No tables will be processed."
                 )
 
-        for table_name in tables:
+        total = len(tables)
+        _status(f"Found {total} table(s) — fetching metadata...")
+
+        for i, table_name in enumerate(tables, 1):
             table = Table(name=table_name.lower(), schema=schema_name.lower())
+            prefix = f"[{i}/{total}] {table_name.lower()}"
 
             # Get columns
+            _status(f"{prefix} — columns")
             table.columns = self._get_columns(schema_name, table_name)
 
             # Get constraints
+            _status(f"{prefix} — constraints")
             constraints = self._get_constraints(schema_name, table_name)
             for constraint in constraints:
                 if constraint.type == ConstraintType.PRIMARY_KEY:
@@ -151,23 +165,32 @@ class SnowflakeSchemaDiscovery:
                     table.check_constraints.append(constraint)
 
             # Get row count estimate
+            _status(f"{prefix} — row count")
             table.row_count = self._get_row_count(schema_name, table_name)
 
             # Get table comment
             table.comment = self._get_table_comment(schema_name, table_name)
 
+            _status(
+                f"{prefix} — done  "
+                f"({len(table.columns)} cols, {table.row_count:,} rows)"
+            )
             schema.tables.append(table)
 
         # Skip views and procedures when filtering by specific table
         if not table_filter:
             # Get views with definitions
             view_names = self._get_views(schema_name)
+            if view_names:
+                _status(f"Fetching {len(view_names)} view definition(s)...")
             for view_name in view_names:
                 view_ddl = self._get_view_definition(schema_name, view_name)
                 schema.views.append(View(name=view_name, ddl=view_ddl))
 
             # Get procedures with definitions
             procedure_names = self._get_procedures(schema_name)
+            if procedure_names:
+                _status(f"Fetching {len(procedure_names)} procedure definition(s)...")
             for proc_name in procedure_names:
                 proc_ddl = self._get_procedure_definition(schema_name, proc_name)
                 schema.procedures.append(Procedure(name=proc_name, ddl=proc_ddl))

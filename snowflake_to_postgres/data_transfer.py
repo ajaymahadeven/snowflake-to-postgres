@@ -198,10 +198,25 @@ class DataTransferEngine:
                 writer = csv.writer(buffer)
 
                 batch_count = 0
+                column_list = ", ".join([f'"{col.lower()}"' for col in columns])
+                copy_sql = f'COPY {target_schema}."{target_table}" ({column_list}) FROM STDIN WITH CSV'
+
                 while True:
+                    batch_count += 1
+                    if status_callback:
+                        status_callback(
+                            f"Batch {batch_count}: fetching up to {self.batch_size:,} rows from Snowflake..."
+                        )
                     rows = sf_cursor.fetchmany(self.batch_size)
                     if not rows:
+                        if status_callback:
+                            status_callback("No more rows — transfer complete.")
                         break
+
+                    if status_callback:
+                        status_callback(
+                            f"Batch {batch_count}: writing {len(rows):,} rows to PostgreSQL (COPY)..."
+                        )
 
                     # Write rows to CSV buffer
                     buffer.seek(0)
@@ -214,17 +229,18 @@ class DataTransferEngine:
 
                     # Use COPY to load data
                     buffer.seek(0)
-                    column_list = ", ".join([f'"{col.lower()}"' for col in columns])
-                    copy_sql = f'COPY {target_schema}."{target_table}" ({column_list}) FROM STDIN WITH CSV'
-
                     pg_cursor.copy_expert(copy_sql, buffer)
                     pg_conn.commit()
 
-                    batch_count += 1
                     total_rows += len(rows)
 
                     if progress_callback:
                         progress_callback(total_rows)
+
+                    if status_callback:
+                        status_callback(
+                            f"Batch {batch_count}: done — {total_rows:,} rows inserted so far."
+                        )
 
                     logger.debug(
                         f"Batch {batch_count}: {len(rows)} rows transferred (total: {total_rows})"
@@ -283,25 +299,40 @@ class DataTransferEngine:
                 pg_cursor = pg_conn.cursor()
 
                 batch_count = 0
+                column_list = ", ".join([f'"{col.lower()}"' for col in columns])
+                placeholders = ", ".join(["%s"] * len(columns))
+                insert_sql = f'INSERT INTO {target_schema}."{target_table}" ({column_list}) VALUES ({placeholders})'
+
                 while True:
+                    batch_count += 1
+                    if status_callback:
+                        status_callback(
+                            f"Batch {batch_count}: fetching up to {self.batch_size:,} rows from Snowflake..."
+                        )
                     rows = sf_cursor.fetchmany(self.batch_size)
                     if not rows:
+                        if status_callback:
+                            status_callback("No more rows — transfer complete.")
                         break
 
-                    # Build batch INSERT
-                    column_list = ", ".join([f'"{col.lower()}"' for col in columns])
-                    placeholders = ", ".join(["%s"] * len(columns))
-                    insert_sql = f'INSERT INTO {target_schema}."{target_table}" ({column_list}) VALUES ({placeholders})'
+                    if status_callback:
+                        status_callback(
+                            f"Batch {batch_count}: writing {len(rows):,} rows to PostgreSQL (INSERT)..."
+                        )
 
                     # Execute batch
                     pg_cursor.executemany(insert_sql, rows)
                     pg_conn.commit()
 
-                    batch_count += 1
                     total_rows += len(rows)
 
                     if progress_callback:
                         progress_callback(total_rows)
+
+                    if status_callback:
+                        status_callback(
+                            f"Batch {batch_count}: done — {total_rows:,} rows inserted so far."
+                        )
 
                     logger.debug(
                         f"Batch {batch_count}: {len(rows)} rows inserted (total: {total_rows})"
