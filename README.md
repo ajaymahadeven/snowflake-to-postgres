@@ -142,7 +142,8 @@ python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHE
 --sample-size 10000       # Row sample size for validate Layer 5 (default: 0 = skipped)
 --dry-run                 # Preview without executing
 --output file.sql         # Save DDL to file
---force                   # Skip confirmation prompts
+--force                   # Skip all confirmation and post-action prompts
+--no-prompt               # Skip post-action prompts only (verify / save logs)
 --continue-on-error       # Continue processing even if errors occur
 ```
 
@@ -185,6 +186,44 @@ python manage.py sf_migrate validate --schema N360DEV_PI --target n360dev_pi --t
 # Validate with row-level sampling
 python manage.py sf_migrate validate --schema N360DEV_PI --target n360dev_pi --table TRANSACTIONS --sample-size 10000
 ```
+
+---
+
+## Post-action Prompts
+
+After certain commands complete, the tool interactively offers two options:
+
+| Command       | Verify prompt | Save log prompt |
+| ------------- | :-----------: | :-------------: |
+| `migrate`     |       ✓       |        ✓        |
+| `transfer`    |       ✓       |        ✓        |
+| `build`       |       -       |        ✓        |
+| `validate`    |       -       |        ✓        |
+| `build-views` |       -       |        ✓        |
+| `discover`    |       -       |        -        |
+| `destroy`     |       -       |        -        |
+
+**Verify prompt** — runs the full `validate` command inline so you can immediately confirm data integrity after a migration or transfer.
+
+**Save log prompt** — writes the full terminal output to `logs/{YYYYMMDD_HHMMSS}_{SCHEMA}/{action}.log` in the current working directory. The log file includes the start/end time, schema names, and the exact command that was run.
+
+```
+logs/
+└── 20260307_143022_MY_SCHEMA/
+    └── migrate.log
+```
+
+To skip all prompts (CI/automation):
+
+```bash
+# Skip post-action prompts only
+python manage.py sf_migrate migrate --schema MY_SCHEMA --target my_schema --no-prompt
+
+# Skip all confirmations including destroy confirmation
+python manage.py sf_migrate migrate --schema MY_SCHEMA --target my_schema --force
+```
+
+`--dry-run` also suppresses the save log prompt since no real changes were made.
 
 ---
 
