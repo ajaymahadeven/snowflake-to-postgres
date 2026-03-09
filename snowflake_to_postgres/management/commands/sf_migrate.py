@@ -213,6 +213,7 @@ Examples:
 
         log_path = None
         log_file = None
+        self._log_folder = None  # shared across all sub-actions in this run
 
         # Ask about log saving BEFORE the action starts so we can stream output live
         if action in _log_actions and not suppress:
@@ -222,6 +223,8 @@ Examples:
                 answer = ""
             if answer == "y":
                 log_path, log_file = self._open_log_file(options, action, start_time)
+                if log_path:
+                    self._log_folder = log_path.parent
 
         tee = TeeWriter(self.stdout, log_file)
         self.stdout = tee
@@ -464,11 +467,7 @@ Examples:
                 self.stdout.write(self.style.ERROR(f"      DDL starts: {hint}"))
 
         if failed_execution:
-            self.stdout.write(
-                self.style.WARNING(
-                    "\nFailed views (save with --output for manual editing):"
-                )
-            )
+            self.stdout.write(self.style.WARNING("\nFailed views:"))
             for name, error, ddl, cross_deps in failed_execution:
                 self.stdout.write(
                     self.style.ERROR(f"  {name}: {error.split(chr(10))[0]}")
@@ -478,10 +477,12 @@ Examples:
                         f"    Requires: {', '.join(cross_deps)} "
                         f"(migrate those schemas first)"
                     )
-                self.stdout.write("  --- DDL ---")
-                for line in ddl.splitlines():
-                    self.stdout.write(f"  {line}")
-                self.stdout.write("")
+
+            saved_path = self._save_failed_views_ddl(options, failed_execution)
+            if saved_path:
+                self.stdout.write(
+                    self.style.SUCCESS(f"\nFailed view DDL saved to: {saved_path}")
+                )
 
         if proc_ddl_statements:
             self.stdout.write(
@@ -908,6 +909,32 @@ Examples:
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"Could not open log file: {e}"))
             return None, None
+
+    def _save_failed_views_ddl(self, options, failed_execution):
+        """Write DDL of failed views into the current log folder as failed_views.sql."""
+        if self._log_folder:
+            folder = self._log_folder
+        else:
+            # No active log session — create a standalone folder
+            schema = options.get("schema") or options.get("target") or "unknown"
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            folder = Path(f"logs/{timestamp}_{schema}")
+            folder.mkdir(parents=True, exist_ok=True)
+
+        sql_path = folder / "failed_views.sql"
+        try:
+            with open(sql_path, "w", encoding="utf-8") as f:
+                f.write(f"-- {len(failed_execution)} failed view(s) — fix and apply manually\n\n")
+                for name, error, ddl, cross_deps in failed_execution:
+                    f.write(f"-- View: {name}\n")
+                    f.write(f"-- Error: {error.splitlines()[0]}\n")
+                    if cross_deps:
+                        f.write(f"-- Requires schemas: {', '.join(cross_deps)}\n")
+                    f.write(f"{ddl.rstrip()}\n\n")
+            return sql_path
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"Could not save failed views DDL: {e}"))
+            return None
 
     def _write_ddl_to_file(self, statements, filepath):
         """Write DDL statements to file."""
