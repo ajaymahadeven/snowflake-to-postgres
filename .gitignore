@@ -12,6 +12,7 @@ __pycache__/
 .idea/
 .DS_Store
 node_modules/
+*.sql
 
 # Docker - Volume
 # This is my default docker volume.
