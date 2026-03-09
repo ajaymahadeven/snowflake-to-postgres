@@ -8,6 +8,7 @@ Runs up to 5 layers of checks, from fast row counts to row-level sampling.
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional
 
@@ -663,6 +664,11 @@ class DataValidator:
     def _norm_val(self, val: Any) -> str:
         if val is None:
             return "NULL"
+        # Normalise timezone-aware datetimes to UTC so Snowflake (which returns
+        # the original offset, e.g. -08:00) and PostgreSQL (which returns UTC)
+        # compare equal for the same instant.
+        if hasattr(val, "tzinfo") and val.tzinfo is not None:
+            val = val.astimezone(timezone.utc)
         return str(val).strip()
 
     def _status(self, message: str) -> None:
