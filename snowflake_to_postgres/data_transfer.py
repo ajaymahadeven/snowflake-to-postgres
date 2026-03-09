@@ -193,13 +193,15 @@ class DataTransferEngine:
             with self.pg_conn.connection() as pg_conn:
                 pg_cursor = pg_conn.cursor()
 
-                # Create CSV buffer
-                # Use QUOTE_NONNUMERIC so empty strings are written as "" (quoted),
-                # which PG COPY treats as an empty string rather than NULL.
-                # NULLs are represented by the explicit marker \N, told to COPY via NULL '\N'.
+                # Create CSV buffer.
+                # Use \N as the explicit NULL marker (PG standard) with QUOTE_MINIMAL.
+                # \N contains no CSV special chars so csv.writer leaves it unquoted;
+                # PG COPY NULL '\N' matches only unquoted \N → DB NULL.
+                # Empty strings from Snowflake become unquoted empty fields which,
+                # because NULL is now '\N' (not empty), PG stores as '' not NULL.
                 _NULL_MARKER = "\\N"
                 buffer = io.StringIO()
-                writer = csv.writer(buffer, quoting=csv.QUOTE_NONNUMERIC)
+                writer = csv.writer(buffer)
 
                 batch_count = 0
                 column_list = ", ".join([f'"{col.lower()}"' for col in columns])
@@ -230,10 +232,9 @@ class DataTransferEngine:
                     buffer.truncate()
 
                     for row in rows:
-                        # NULL → explicit marker (unquoted by writer since it's a string,
-                        # but COPY matches it before CSV parsing, so it becomes DB NULL).
-                        # All other values are str()'d; QUOTE_NONNUMERIC ensures empty
-                        # strings are quoted as "" → PG stores them as '' not NULL.
+                        # None  → \N  (unquoted by QUOTE_MINIMAL) → COPY NULL '\N' → DB NULL
+                        # ''    → ''  (unquoted empty)             → PG stores as ''  (not NULL)
+                        # other → str(val) as normal CSV field
                         clean_row = [
                             _NULL_MARKER if val is None else str(val) for val in row
                         ]
