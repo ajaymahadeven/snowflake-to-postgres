@@ -8,9 +8,9 @@ Runs up to 5 layers of checks, from fast row counts to row-level sampling.
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import timezone
+from datetime import date, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +66,15 @@ class DataValidator:
         pg_connection,
         sample_size: int = 0,
         status_callback: Optional[Callable[[str], None]] = None,
+        pg_work_mem: str = "64MB",
+        chunk_date_ranges: bool = True,
     ):
         self.sf_conn = sf_connection
         self.pg_conn = pg_connection
         self.sample_size = sample_size
         self.status_callback = status_callback
+        self.pg_work_mem = pg_work_mem
+        self.chunk_date_ranges = chunk_date_ranges
 
     # ------------------------------------------------------------------
     # Public API
@@ -84,6 +88,8 @@ class DataValidator:
         pg_table: Optional[str] = None,
     ) -> TableValidationResult:
         """Run all validation layers for a single table."""
+        self._pg_set_work_mem()
+
         pg_table = pg_table or sf_table.lower()
         start = time.time()
         result = TableValidationResult(table_name=f"{sf_schema}.{sf_table}")
@@ -105,6 +111,16 @@ class DataValidator:
         date_col = self._detect_date_column(columns)
         numeric_cols = self._get_numeric_columns(columns)
 
+        # Determine chunks for Layers 2 and 4
+        if self.chunk_date_ranges and date_col:
+            chunks = self._get_date_chunks(sf_schema, sf_table, date_col)
+            if chunks:
+                self._status(f"  Chunking into {len(chunks)} monthly windows...")
+            else:
+                chunks = None
+        else:
+            chunks = None
+
         # Layer 1: row count
         self._status("  Layer 1: Row count...")
         result.checks.append(
@@ -116,7 +132,7 @@ class DataValidator:
             self._status(f"  Layer 2: Partition counts by '{date_col}'...")
             result.checks.append(
                 self._check_partition_counts(
-                    sf_schema, sf_table, pg_schema, pg_table, date_col
+                    sf_schema, sf_table, pg_schema, pg_table, date_col, chunks=chunks
                 )
             )
         else:
@@ -133,7 +149,13 @@ class DataValidator:
             self._status("  Layer 4: Aggregate fingerprint...")
             result.checks.append(
                 self._check_aggregate_fingerprint(
-                    sf_schema, sf_table, pg_schema, pg_table, date_col, numeric_cols
+                    sf_schema,
+                    sf_table,
+                    pg_schema,
+                    pg_table,
+                    date_col,
+                    numeric_cols,
+                    chunks=chunks,
                 )
             )
         else:
@@ -163,7 +185,10 @@ class DataValidator:
             f'SELECT COUNT(*) as cnt FROM {pg_schema}."{pg_table}"', "cnt"
         )
         passed = sf_count == pg_count
-        delta = abs(sf_count - pg_count) if None not in (sf_count, pg_count) else None
+        if sf_count is not None and pg_count is not None:
+            delta = abs(sf_count - pg_count)
+        else:
+            delta = None
         return CheckResult(
             name="row_count",
             passed=passed,
@@ -177,10 +202,33 @@ class DataValidator:
         )
 
     def _check_partition_counts(
-        self, sf_schema, sf_table, pg_schema, pg_table, date_col
+        self, sf_schema, sf_table, pg_schema, pg_table, date_col, chunks=None
     ) -> CheckResult:
-        sf_counts = self._sf_group_count(sf_schema, sf_table, date_col)
-        pg_counts = self._pg_group_count(pg_schema, pg_table, date_col.lower())
+        if chunks:
+            sf_counts: Dict[str, int] = {}
+            pg_counts: Dict[str, int] = {}
+            for chunk_start, chunk_end in chunks:
+                sf_counts.update(
+                    self._sf_group_count(
+                        sf_schema,
+                        sf_table,
+                        date_col,
+                        date_from=chunk_start,
+                        date_to=chunk_end,
+                    )
+                )
+                pg_counts.update(
+                    self._pg_group_count(
+                        pg_schema,
+                        pg_table,
+                        date_col.lower(),
+                        date_from=chunk_start,
+                        date_to=chunk_end,
+                    )
+                )
+        else:
+            sf_counts = self._sf_group_count(sf_schema, sf_table, date_col)
+            pg_counts = self._pg_group_count(pg_schema, pg_table, date_col.lower())
 
         all_dates = set(sf_counts) | set(pg_counts)
         mismatches = []
@@ -254,13 +302,46 @@ class DataValidator:
         return results
 
     def _check_aggregate_fingerprint(
-        self, sf_schema, sf_table, pg_schema, pg_table, date_col, numeric_cols
+        self,
+        sf_schema,
+        sf_table,
+        pg_schema,
+        pg_table,
+        date_col,
+        numeric_cols,
+        chunks=None,
     ) -> CheckResult:
         cols = numeric_cols[:10]  # cap to keep query manageable
-        sf_aggs = self._sf_aggregates_by_date(sf_schema, sf_table, date_col, cols)
-        pg_aggs = self._pg_aggregates_by_date(
-            pg_schema, pg_table, date_col.lower(), cols
-        )
+
+        if chunks:
+            sf_aggs: Dict[str, Dict[int, Any]] = {}
+            pg_aggs: Dict[str, Dict[int, Any]] = {}
+            for chunk_start, chunk_end in chunks:
+                sf_aggs.update(
+                    self._sf_aggregates_by_date(
+                        sf_schema,
+                        sf_table,
+                        date_col,
+                        cols,
+                        date_from=chunk_start,
+                        date_to=chunk_end,
+                    )
+                )
+                pg_aggs.update(
+                    self._pg_aggregates_by_date(
+                        pg_schema,
+                        pg_table,
+                        date_col.lower(),
+                        cols,
+                        date_from=chunk_start,
+                        date_to=chunk_end,
+                    )
+                )
+        else:
+            sf_aggs = self._sf_aggregates_by_date(sf_schema, sf_table, date_col, cols)
+            pg_aggs = self._pg_aggregates_by_date(
+                pg_schema, pg_table, date_col.lower(), cols
+            )
 
         all_dates = set(sf_aggs) | set(pg_aggs)
         mismatches = []
@@ -400,24 +481,95 @@ class DataValidator:
             row = cur.fetchone()
             return row[key] if row else None
 
-    def _sf_group_count(self, schema: str, table: str, date_col: str) -> Dict[str, int]:
+    def _get_date_chunks(
+        self, sf_schema: str, sf_table: str, date_col: str
+    ) -> List[Tuple]:
+        """Return a list of (chunk_start, chunk_end_exclusive) monthly date tuples.
+
+        Queries Snowflake for the MIN and MAX of the date column, then produces
+        one tuple per calendar month spanning that range.  Returns [] if the
+        table is empty or no valid dates are present.
+        """
+        query = (
+            f'SELECT MIN(CAST("{date_col}" AS DATE)) as MIN_D, '
+            f'MAX(CAST("{date_col}" AS DATE)) as MAX_D '
+            f"FROM {sf_schema}.{sf_table}"
+        )
+        with self.sf_conn.cursor() as cur:
+            cur.execute(query)
+            row = cur.fetchone()
+
+        if not row:
+            return []
+
+        min_d = row["MIN_D"]
+        max_d = row["MAX_D"]
+
+        if min_d is None or max_d is None:
+            return []
+
+        # Ensure we have Python date objects
+        if hasattr(min_d, "date"):
+            min_d = min_d.date()
+        if hasattr(max_d, "date"):
+            max_d = max_d.date()
+
+        chunks: List[Tuple] = []
+        current = date(min_d.year, min_d.month, 1)
+        while current <= max_d:
+            # Compute first day of next month
+            if current.month == 12:
+                next_month = date(current.year + 1, 1, 1)
+            else:
+                next_month = date(current.year, current.month + 1, 1)
+            chunks.append((current, next_month))
+            current = next_month
+
+        return chunks
+
+    def _sf_group_count(
+        self,
+        schema: str,
+        table: str,
+        date_col: str,
+        date_from=None,
+        date_to=None,
+    ) -> Dict[str, int]:
+        where = ""
+        if date_from is not None and date_to is not None:
+            where = (
+                f" WHERE \"{date_col}\" >= '{date_from.isoformat()}'"
+                f" AND \"{date_col}\" < '{date_to.isoformat()}'"
+            )
         query = (
             f'SELECT CAST("{date_col}" AS DATE) as D, COUNT(*) as CNT '
-            f"FROM {schema}.{table} GROUP BY 1 ORDER BY 1"
+            f"FROM {schema}.{table}{where} GROUP BY 1 ORDER BY 1"
         )
         with self.sf_conn.cursor() as cur:
             cur.execute(query)
             return {str(row["D"]): row["CNT"] for row in cur.fetchall()}
 
     def _sf_aggregates_by_date(
-        self, schema: str, table: str, date_col: str, numeric_cols: List[str]
+        self,
+        schema: str,
+        table: str,
+        date_col: str,
+        numeric_cols: List[str],
+        date_from=None,
+        date_to=None,
     ) -> Dict[str, Dict[int, Any]]:
         col_exprs = ", ".join(
             [f'SUM("{c}") as S{i}' for i, c in enumerate(numeric_cols)]
         )
+        where = ""
+        if date_from is not None and date_to is not None:
+            where = (
+                f" WHERE \"{date_col}\" >= '{date_from.isoformat()}'"
+                f" AND \"{date_col}\" < '{date_to.isoformat()}'"
+            )
         query = (
             f'SELECT CAST("{date_col}" AS DATE) as D, {col_exprs} '
-            f"FROM {schema}.{table} GROUP BY 1 ORDER BY 1"
+            f"FROM {schema}.{table}{where} GROUP BY 1 ORDER BY 1"
         )
         with self.sf_conn.cursor() as cur:
             cur.execute(query)
@@ -527,30 +679,60 @@ class DataValidator:
     # PostgreSQL query helpers
     # ------------------------------------------------------------------
 
+    def _pg_set_work_mem(self) -> None:
+        """Set the session-level work_mem on the PostgreSQL connection."""
+        with self.pg_conn.cursor() as cur:
+            cur.execute("SET work_mem = %s", (self.pg_work_mem,))
+
     def _pg_scalar(self, query: str, key: str) -> Optional[int]:
         with self.pg_conn.cursor() as cur:
             cur.execute(query)
             row = cur.fetchone()
             return row[key] if row else None
 
-    def _pg_group_count(self, schema: str, table: str, date_col: str) -> Dict[str, int]:
+    def _pg_group_count(
+        self,
+        schema: str,
+        table: str,
+        date_col: str,
+        date_from=None,
+        date_to=None,
+    ) -> Dict[str, int]:
+        where = ""
+        if date_from is not None and date_to is not None:
+            where = (
+                f" WHERE \"{date_col}\" >= '{date_from.isoformat()}'"
+                f" AND \"{date_col}\" < '{date_to.isoformat()}'"
+            )
         query = (
             f'SELECT CAST("{date_col}" AS DATE) as d, COUNT(*) as cnt '
-            f'FROM {schema}."{table}" GROUP BY 1 ORDER BY 1'
+            f'FROM {schema}."{table}"{where} GROUP BY 1 ORDER BY 1'
         )
         with self.pg_conn.cursor() as cur:
             cur.execute(query)
             return {str(row["d"]): row["cnt"] for row in cur.fetchall()}
 
     def _pg_aggregates_by_date(
-        self, schema: str, table: str, date_col: str, numeric_cols: List[str]
+        self,
+        schema: str,
+        table: str,
+        date_col: str,
+        numeric_cols: List[str],
+        date_from=None,
+        date_to=None,
     ) -> Dict[str, Dict[int, Any]]:
         col_exprs = ", ".join(
             [f'SUM("{c.lower()}") as s{i}' for i, c in enumerate(numeric_cols)]
         )
+        where = ""
+        if date_from is not None and date_to is not None:
+            where = (
+                f" WHERE \"{date_col}\" >= '{date_from.isoformat()}'"
+                f" AND \"{date_col}\" < '{date_to.isoformat()}'"
+            )
         query = (
             f'SELECT CAST("{date_col}" AS DATE) as d, {col_exprs} '
-            f'FROM {schema}."{table}" GROUP BY 1 ORDER BY 1'
+            f'FROM {schema}."{table}"{where} GROUP BY 1 ORDER BY 1'
         )
         with self.pg_conn.cursor() as cur:
             cur.execute(query)
