@@ -9,6 +9,7 @@ import io
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, List, Optional
@@ -485,13 +486,20 @@ class DataTransferEngine:
         table_filter: Optional[List[str]] = None,
         where_clause: Optional[str] = None,
         limit: Optional[int] = None,
+        workers: int = 1,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
         row_progress_callback: Optional[Callable[[int], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
     ) -> List[TransferStats]:
         """
         Transfer all tables in a schema.
+
+        When workers > 1 each table is transferred in a separate thread, each
+        with its own Snowflake connection.  Output is prefixed with the table
+        name so interleaved lines remain readable.
         """
+        from .connections import SnowflakeConnection  # local import avoids circular dep
+
         # Get list of tables
         tables = self._get_tables(source_schema)
 
@@ -499,23 +507,75 @@ class DataTransferEngine:
             table_filter_lower = [t.lower() for t in table_filter]
             tables = [t for t in tables if t in table_filter_lower]
 
-        stats_list = []
         total_tables = len(tables)
 
-        for i, table in enumerate(tables, 1):
-            if progress_callback:
-                progress_callback(table, i, total_tables)
+        if workers <= 1:
+            stats_list = []
+            for i, table in enumerate(tables, 1):
+                if progress_callback:
+                    progress_callback(table, i, total_tables)
+                stats = self.transfer_table(
+                    source_schema=source_schema,
+                    source_table=table,
+                    target_schema=target_schema,
+                    where_clause=where_clause,
+                    limit=limit,
+                    progress_callback=row_progress_callback,
+                    status_callback=status_callback,
+                )
+                stats_list.append(stats)
+            return stats_list
 
-            stats = self.transfer_table(
-                source_schema=source_schema,
-                source_table=table,
-                target_schema=target_schema,
-                where_clause=where_clause,
-                limit=limit,
-                progress_callback=row_progress_callback,
-                status_callback=status_callback,
+        # --- Parallel path ---
+        # Each worker gets its own SnowflakeConnection cloned from the primary.
+        sf_config = self.sf_conn.config
+        _print_lock = threading.Lock()
+
+        def _prefixed_status(table_name, msg):
+            if status_callback:
+                with _print_lock:
+                    status_callback(f"[{table_name}] {msg}")
+
+        def _prefixed_row_progress(table_name, rows_so_far):
+            if row_progress_callback:
+                with _print_lock:
+                    row_progress_callback(rows_so_far)
+
+        completed_count = [0]
+
+        def _transfer_one(table):
+            sf_conn = SnowflakeConnection(sf_config)
+            engine = DataTransferEngine(
+                sf_conn, self.pg_conn, self.batch_size, self.use_copy
             )
-            stats_list.append(stats)
+            try:
+                stats = engine.transfer_table(
+                    source_schema=source_schema,
+                    source_table=table,
+                    target_schema=target_schema,
+                    where_clause=where_clause,
+                    limit=limit,
+                    progress_callback=lambda n: _prefixed_row_progress(table, n),
+                    status_callback=lambda m: _prefixed_status(table, m),
+                )
+            finally:
+                sf_conn.close()
+
+            with _print_lock:
+                completed_count[0] += 1
+                if progress_callback:
+                    progress_callback(table, completed_count[0], total_tables)
+
+            return stats
+
+        stats_list = [None] * total_tables
+        table_index = {t: i for i, t in enumerate(tables)}
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_table = {executor.submit(_transfer_one, t): t for t in tables}
+            for future in as_completed(future_to_table):
+                table = future_to_table[future]
+                stats_list[table_index[table]] = future.result()
 
         return stats_list
 

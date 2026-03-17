@@ -118,6 +118,15 @@ Examples:
             help="Batch size for data transfer (default: 10000)",
         )
 
+        # Parallel workers for data transfer
+        parser.add_argument(
+            "--workers",
+            type=int,
+            default=1,
+            help="Number of parallel table-transfer workers (default: 1). "
+            "Each worker uses its own Snowflake connection.",
+        )
+
         # WHERE clause for filtering data
         parser.add_argument(
             "--where",
@@ -553,6 +562,7 @@ Examples:
         target_schema = options.get("target") or source_schema.lower()
         db_alias = options["db"]
         batch_size = options["batch_size"]
+        workers = options.get("workers", 1)
         table_filter = [options["table"]] if options.get("table") else None
         where_clause = options.get("where")
         limit = options.get("limit")
@@ -560,12 +570,19 @@ Examples:
         self.stdout.write(
             self.style.WARNING(f"Transferring data: {source_schema} -> {target_schema}")
         )
+        if workers > 1:
+            self.stdout.write(f"  Workers: {workers} (parallel)")
         if where_clause:
             self.stdout.write(f"  WHERE: {where_clause}")
         if limit:
             self.stdout.write(f"  LIMIT: {limit:,}")
 
-        with SnowflakeConnection() as sf_conn, PostgresConnection(db_alias) as pg_conn:
+        # Scale PG pool to match worker count (plus a small buffer)
+        pg_max_conn = max(5, workers + 2)
+
+        with SnowflakeConnection() as sf_conn, PostgresConnection(
+            db_alias, max_conn=pg_max_conn
+        ) as pg_conn:
             transfer_engine = DataTransferEngine(
                 sf_conn, pg_conn, batch_size=batch_size
             )
@@ -576,6 +593,7 @@ Examples:
                 table_filter=table_filter,
                 where_clause=where_clause,
                 limit=limit,
+                workers=workers,
                 progress_callback=self._create_transfer_progress_callback(),
                 row_progress_callback=self._create_row_progress_callback(),
                 status_callback=self._create_status_callback(),
@@ -924,7 +942,9 @@ Examples:
         sql_path = folder / "failed_views.sql"
         try:
             with open(sql_path, "w", encoding="utf-8") as f:
-                f.write(f"-- {len(failed_execution)} failed view(s) — fix and apply manually\n\n")
+                f.write(
+                    f"-- {len(failed_execution)} failed view(s) — fix and apply manually\n\n"
+                )
                 for name, error, ddl, cross_deps in failed_execution:
                     f.write(f"-- View: {name}\n")
                     f.write(f"-- Error: {error.splitlines()[0]}\n")
