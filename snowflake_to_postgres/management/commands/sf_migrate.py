@@ -192,6 +192,14 @@ Examples:
             help="Skip post-action interactive prompts (for automation)",
         )
 
+        # Always save log without asking
+        parser.add_argument(
+            "--save-log",
+            action="store_true",
+            help="Always save output to a log file without prompting. "
+            "Log is written to logs/{timestamp}_{schema}/{action}.log",
+        )
+
         # Sample size for validate Layer 5 (row-level comparison)
         parser.add_argument(
             "--sample-size",
@@ -235,16 +243,25 @@ Examples:
         log_file = None
         self._log_folder = None  # shared across all sub-actions in this run
 
-        # Ask about log saving BEFORE the action starts so we can stream output live
-        if action in _log_actions and not suppress:
-            try:
-                answer = input(f"Save {action} log to file? [y/N]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                answer = ""
-            if answer == "y":
+        # Open log file — either automatically (--save-log) or by asking the user
+        if action in _log_actions:
+            if options.get("save_log"):
                 log_path, log_file = self._open_log_file(options, action, start_time)
                 if log_path:
                     self._log_folder = log_path.parent
+            elif not suppress:
+                try:
+                    answer = (
+                        input(f"Save {action} log to file? [y/N]: ").strip().lower()
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    answer = ""
+                if answer == "y":
+                    log_path, log_file = self._open_log_file(
+                        options, action, start_time
+                    )
+                    if log_path:
+                        self._log_folder = log_path.parent
 
         tee = TeeWriter(self.stdout, log_file)
         self.stdout = tee

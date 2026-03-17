@@ -146,6 +146,7 @@ python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHE
 --output file.sql         # Save DDL to file
 --force                   # Skip all confirmation and post-action prompts
 --no-prompt               # Skip post-action prompts only (verify / save logs)
+--save-log                # Always save log to file without prompting
 --continue-on-error       # Continue processing even if errors occur
 ```
 
@@ -219,17 +220,25 @@ logs/
     └── migrate.log
 ```
 
-To skip all prompts (CI/automation):
+To skip prompts but always save logs (recommended for long unattended runs):
 
 ```bash
-# Skip post-action prompts only
-python manage.py sf_migrate migrate --schema MY_SCHEMA --target my_schema --no-prompt
+python manage.py sf_migrate transfer --schema MY_SCHEMA --target my_schema --save-log --no-prompt
+```
 
-# Skip all confirmations including destroy confirmation
+To skip all prompts including log saving:
+
+```bash
+python manage.py sf_migrate migrate --schema MY_SCHEMA --target my_schema --no-prompt
+```
+
+To skip all confirmations including the destroy confirmation:
+
+```bash
 python manage.py sf_migrate migrate --schema MY_SCHEMA --target my_schema --force
 ```
 
-`--dry-run` also suppresses the save log prompt since no real changes were made.
+`--dry-run` also suppresses all prompts since no real changes were made.
 
 ---
 
@@ -246,6 +255,7 @@ python manage.py sf_migrate transfer \
   --batch-size 50000 \
   --workers 4 \
   --checkpoint checkpoints/your_schema.json \
+  --save-log \
   --no-prompt \
   --continue-on-error
 ```
@@ -255,6 +265,7 @@ python manage.py sf_migrate transfer \
 | `--batch-size` | 50,000 | 5× fewer Snowflake round-trips vs default             |
 | `--workers`    | 4      | 4 tables transfer simultaneously                      |
 | `--checkpoint` | always | Free insurance — resume from exact row if interrupted |
+| `--save-log`   | always | Full output written to `logs/` automatically          |
 
 Expected duration: **2–4 hours** depending on row width and network.
 
@@ -271,6 +282,7 @@ python manage.py sf_migrate transfer \
   --batch-size 100000 \
   --workers 6 \
   --checkpoint checkpoints/your_schema.json \
+  --save-log \
   --no-prompt \
   --continue-on-error
 ```
@@ -280,6 +292,7 @@ python manage.py sf_migrate transfer \
 | `--batch-size` | 100,000 | Maximum COPY throughput; each batch ~100–200 MB     |
 | `--workers`    | 6       | Match your Snowflake warehouse concurrency          |
 | `--checkpoint` | always  | At this scale a single crash costs hours without it |
+| `--save-log`   | always  | Full output written to `logs/` automatically        |
 
 Expected duration: **1–3 days**. The checkpoint means any crash, disconnect, or token expiry is survived — re-run the same command and it picks up exactly where it left off.
 
@@ -298,6 +311,7 @@ python manage.py sf_migrate transfer \
   --batch-size 50000 \
   --workers 4 \
   --checkpoint checkpoints/your_schema.json \
+  --save-log \
   --no-prompt \
   --continue-on-error
 
