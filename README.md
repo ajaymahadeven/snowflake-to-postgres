@@ -136,7 +136,9 @@ python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHE
 
 ```bash
 --table TABLE_NAME        # Migrate, build, transfer, or validate a single table only
---batch-size 50000        # Larger batch = faster migration
+--batch-size 50000        # Larger batch = faster migration (default: 10,000)
+--workers 4               # Transfer N tables in parallel, each with its own connection
+--checkpoint FILE         # Save progress to FILE; resume from exact row on restart
 --where "COLUMN > 'val'"  # Filter rows with a SQL WHERE clause
 --limit 10000             # Limit number of rows transferred (useful for testing)
 --sample-size 10000       # Row sample size for validate Layer 5 (default: 0 = skipped)
@@ -155,8 +157,12 @@ python manage.py sf_migrate validate --schema SOURCE_SCHEMA --target TARGET_SCHE
 # Full migration
 python manage.py sf_migrate migrate --schema N360DEV_PI --target n360dev_pi
 
-# Fast migration with larger batches
-python manage.py sf_migrate migrate --schema N360DEV_PI --target n360dev_pi --batch-size 100000
+# Fast migration — parallel workers, large batches, checkpoint for safety
+python manage.py sf_migrate transfer \
+  --schema N360DEV_PI --target n360dev_pi \
+  --batch-size 50000 --workers 4 \
+  --checkpoint checkpoints/n360dev_pi.json \
+  --no-prompt --continue-on-error
 
 # Rebuild schema from scratch
 python manage.py sf_migrate destroy --target n360dev_pi --force
@@ -227,9 +233,142 @@ python manage.py sf_migrate migrate --schema MY_SCHEMA --target my_schema --forc
 
 ---
 
+## Large-Scale Migrations
+
+### 100 GB
+
+```bash
+tmux new -s migration
+
+python manage.py sf_migrate transfer \
+  --schema YOUR_SCHEMA \
+  --target your_schema \
+  --batch-size 50000 \
+  --workers 4 \
+  --checkpoint checkpoints/your_schema.json \
+  --no-prompt \
+  --continue-on-error
+```
+
+| Setting        | Value  | Why                                                   |
+| -------------- | ------ | ----------------------------------------------------- |
+| `--batch-size` | 50,000 | 5× fewer Snowflake round-trips vs default             |
+| `--workers`    | 4      | 4 tables transfer simultaneously                      |
+| `--checkpoint` | always | Free insurance — resume from exact row if interrupted |
+
+Expected duration: **2–4 hours** depending on row width and network.
+
+---
+
+### 1 TB
+
+```bash
+tmux new -s migration
+
+python manage.py sf_migrate transfer \
+  --schema YOUR_SCHEMA \
+  --target your_schema \
+  --batch-size 100000 \
+  --workers 6 \
+  --checkpoint checkpoints/your_schema.json \
+  --no-prompt \
+  --continue-on-error
+```
+
+| Setting        | Value   | Why                                                 |
+| -------------- | ------- | --------------------------------------------------- |
+| `--batch-size` | 100,000 | Maximum COPY throughput; each batch ~100–200 MB     |
+| `--workers`    | 6       | Match your Snowflake warehouse concurrency          |
+| `--checkpoint` | always  | At this scale a single crash costs hours without it |
+
+Expected duration: **1–3 days**. The checkpoint means any crash, disconnect, or token expiry is survived — re-run the same command and it picks up exactly where it left off.
+
+---
+
+### Running in the background (SSH-safe with tmux)
+
+```bash
+# Create a named session before starting
+tmux new -s migration
+
+# Run your transfer inside it
+python manage.py sf_migrate transfer \
+  --schema YOUR_SCHEMA \
+  --target your_schema \
+  --batch-size 50000 \
+  --workers 4 \
+  --checkpoint checkpoints/your_schema.json \
+  --no-prompt \
+  --continue-on-error
+
+# Detach — safe to close SSH, process keeps running
+Ctrl+B  D
+
+# SSH back in later and reattach
+tmux attach -t migration
+
+# List all running sessions
+tmux ls
+
+# Kill a session when done
+tmux kill-session -t migration
+```
+
+If the process dies for any reason, re-run the exact same command in a new session. The `--checkpoint` file handles the rest — completed tables are skipped automatically.
+
+---
+
+### Resuming an interrupted transfer
+
+If a transfer was interrupted without `--checkpoint`, you need to manually reconstruct the checkpoint from the terminal output.
+
+**Step 1 — Identify the partial table** (the one mid-transfer when it died):
+
+```sql
+SELECT tablename, n_live_tup AS approx_rows
+FROM   pg_stat_user_tables
+WHERE  schemaname = 'your_target_schema'
+ORDER  BY n_live_tup DESC
+LIMIT  5;
+```
+
+**Step 2 — Truncate the partial table:**
+
+```sql
+TRUNCATE TABLE your_target_schema.the_partial_table;
+```
+
+**Step 3 — Get the full table list in transfer order:**
+
+```bash
+python manage.py sf_migrate discover --schema YOUR_SCHEMA --format json \
+  | python -c "
+import json, sys
+tables = [t['name'].lower() for t in json.load(sys.stdin)['tables']]
+for i, t in enumerate(tables, 1):
+    print(f'[{i:2}/{len(tables)}] {t}')
+"
+```
+
+**Step 4 — Create the checkpoint file** listing only the fully completed tables:
+
+```json
+{
+  "schema": "YOUR_SCHEMA",
+  "target": "your_target_schema",
+  "completed": ["table_that_completed_1", "table_that_completed_2"],
+  "in_progress": {}
+}
+```
+
+Save as `checkpoints/your_schema.json`, then re-run with `--checkpoint`.
+
+---
+
 ## Migration Performance
 
-- Typical speed: **10,000 - 100,000 rows/second** depending on network and table size.
+- Typical speed: **50,000 – 200,000 rows/second** with `--batch-size 50000` and `--workers 4`.
+- Default speed (no flags): ~10,000 – 50,000 rows/second.
 
 ---
 
@@ -240,7 +379,7 @@ python manage.py sf_migrate migrate --schema MY_SCHEMA --target my_schema --forc
 - Column types
 - Constraints (primary keys, foreign keys)
 
-> **Note:** Views and stored procedures must be migrated manually.
+> **Note:** Views are migrated automatically (best-effort). Stored procedures require manual review.
 
 ---
 
