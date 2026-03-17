@@ -15,6 +15,37 @@ from typing import Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Snowflake error codes that indicate a session/auth expiry
+_SF_AUTH_ERROR_CODES = {"390114", "000403"}
+
+
+def _is_sf_auth_error(exc: Exception) -> bool:
+    """Return True if the exception is a Snowflake auth/session expiry error."""
+    msg = str(exc)
+    return any(code in msg for code in _SF_AUTH_ERROR_CODES)
+
+
+def _build_resume_query(original_query: str, offset: int) -> str:
+    """
+    Append OFFSET (and adjust LIMIT if present) to resume a query from *offset* rows in.
+
+    NOTE: Snowflake does not guarantee row order without an explicit ORDER BY, so
+    this works best when the table has a natural append-only order.  For migration
+    purposes the slight non-determinism is acceptable.
+    """
+    import re as _re
+
+    upper = original_query.upper()
+    limit_match = _re.search(r"\bLIMIT\s+(\d+)", upper)
+    if limit_match:
+        original_limit = int(limit_match.group(1))
+        new_limit = max(original_limit - offset, 0)
+        query = _re.sub(
+            r"\bLIMIT\s+\d+", f"LIMIT {new_limit}", original_query, flags=_re.IGNORECASE
+        )
+        return f"{query} OFFSET {offset}"
+    return f"{original_query} OFFSET {offset}"
+
 
 @dataclass
 class TransferStats:
@@ -167,25 +198,44 @@ class DataTransferEngine:
             if status_callback:
                 status_callback("Querying Snowflake...")
 
-            # Run execute with a timer so the user sees elapsed time
-            stop_ticker = threading.Event()
+            def _execute_with_ticker(cursor, exec_query):
+                """Execute query on cursor, printing elapsed time every 10 s."""
+                stop_ticker = threading.Event()
 
-            def _tick():
-                start = time.time()
-                while not stop_ticker.wait(10):
-                    elapsed = int(time.time() - start)
+                def _tick():
+                    start = time.time()
+                    while not stop_ticker.wait(10):
+                        elapsed = int(time.time() - start)
+                        if status_callback:
+                            status_callback(
+                                f"Still waiting for Snowflake... ({elapsed}s elapsed)"
+                            )
+
+                ticker = threading.Thread(target=_tick, daemon=True)
+                ticker.start()
+                try:
+                    cursor.execute(exec_query)
+                finally:
+                    stop_ticker.set()
+                    ticker.join()
+
+            try:
+                _execute_with_ticker(sf_cursor, query)
+            except Exception as exec_err:
+                if _is_sf_auth_error(exec_err):
                     if status_callback:
                         status_callback(
-                            f"Still waiting for Snowflake... ({elapsed}s elapsed)"
+                            "Snowflake session expired before query — reconnecting..."
                         )
-
-            ticker = threading.Thread(target=_tick, daemon=True)
-            ticker.start()
-            try:
-                sf_cursor.execute(query)
-            finally:
-                stop_ticker.set()
-                ticker.join()
+                    logger.warning(
+                        f"Snowflake auth error on execute, reconnecting: {exec_err}"
+                    )
+                    sf_cursor.close()
+                    sf_conn = self.sf_conn.reconnect()
+                    sf_cursor = sf_conn.cursor()
+                    _execute_with_ticker(sf_cursor, query)
+                else:
+                    raise
 
             if status_callback:
                 status_callback("Fetching and inserting rows...")
@@ -216,7 +266,25 @@ class DataTransferEngine:
                         status_callback(
                             f"Batch {batch_count}: fetching up to {self.batch_size:,} rows from Snowflake..."
                         )
-                    rows = sf_cursor.fetchmany(self.batch_size)
+                    try:
+                        rows = sf_cursor.fetchmany(self.batch_size)
+                    except Exception as fetch_err:
+                        if _is_sf_auth_error(fetch_err) and total_rows > 0:
+                            if status_callback:
+                                status_callback(
+                                    f"Snowflake session expired after {total_rows:,} rows — reconnecting and resuming..."
+                                )
+                            logger.warning(
+                                f"Snowflake auth error at row {total_rows}, reconnecting: {fetch_err}"
+                            )
+                            sf_cursor.close()
+                            sf_conn = self.sf_conn.reconnect()
+                            sf_cursor = sf_conn.cursor()
+                            resume_query = _build_resume_query(query, total_rows)
+                            sf_cursor.execute(resume_query)
+                            continue
+                        raise
+
                     if not rows:
                         if status_callback:
                             status_callback("No more rows — transfer complete.")
@@ -286,24 +354,44 @@ class DataTransferEngine:
             if status_callback:
                 status_callback("Querying Snowflake...")
 
-            stop_ticker = threading.Event()
+            def _execute_with_ticker(cursor, exec_query):
+                """Execute query on cursor, printing elapsed time every 10 s."""
+                stop_ticker = threading.Event()
 
-            def _tick():
-                start = time.time()
-                while not stop_ticker.wait(10):
-                    elapsed = int(time.time() - start)
+                def _tick():
+                    start = time.time()
+                    while not stop_ticker.wait(10):
+                        elapsed = int(time.time() - start)
+                        if status_callback:
+                            status_callback(
+                                f"Still waiting for Snowflake... ({elapsed}s elapsed)"
+                            )
+
+                ticker = threading.Thread(target=_tick, daemon=True)
+                ticker.start()
+                try:
+                    cursor.execute(exec_query)
+                finally:
+                    stop_ticker.set()
+                    ticker.join()
+
+            try:
+                _execute_with_ticker(sf_cursor, query)
+            except Exception as exec_err:
+                if _is_sf_auth_error(exec_err):
                     if status_callback:
                         status_callback(
-                            f"Still waiting for Snowflake... ({elapsed}s elapsed)"
+                            "Snowflake session expired before query — reconnecting..."
                         )
-
-            ticker = threading.Thread(target=_tick, daemon=True)
-            ticker.start()
-            try:
-                sf_cursor.execute(query)
-            finally:
-                stop_ticker.set()
-                ticker.join()
+                    logger.warning(
+                        f"Snowflake auth error on execute, reconnecting: {exec_err}"
+                    )
+                    sf_cursor.close()
+                    sf_conn = self.sf_conn.reconnect()
+                    sf_cursor = sf_conn.cursor()
+                    _execute_with_ticker(sf_cursor, query)
+                else:
+                    raise
 
             if status_callback:
                 status_callback("Fetching and inserting rows...")
@@ -322,7 +410,25 @@ class DataTransferEngine:
                         status_callback(
                             f"Batch {batch_count}: fetching up to {self.batch_size:,} rows from Snowflake..."
                         )
-                    rows = sf_cursor.fetchmany(self.batch_size)
+                    try:
+                        rows = sf_cursor.fetchmany(self.batch_size)
+                    except Exception as fetch_err:
+                        if _is_sf_auth_error(fetch_err) and total_rows > 0:
+                            if status_callback:
+                                status_callback(
+                                    f"Snowflake session expired after {total_rows:,} rows — reconnecting and resuming..."
+                                )
+                            logger.warning(
+                                f"Snowflake auth error at row {total_rows}, reconnecting: {fetch_err}"
+                            )
+                            sf_cursor.close()
+                            sf_conn = self.sf_conn.reconnect()
+                            sf_cursor = sf_conn.cursor()
+                            resume_query = _build_resume_query(query, total_rows)
+                            sf_cursor.execute(resume_query)
+                            continue
+                        raise
+
                     if not rows:
                         if status_callback:
                             status_callback("No more rows — transfer complete.")
