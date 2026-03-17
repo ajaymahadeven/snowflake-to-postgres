@@ -44,7 +44,7 @@ class SnowflakeConnection:
 
     def connect(self):
         """Establish connection to Snowflake."""
-        if self._connection is None:
+        if self._connection is None or self._connection.is_closed():
             self._connection = snowflake.connector.connect(
                 user=self.config["user"],
                 password=self.config["password"],
@@ -53,6 +53,11 @@ class SnowflakeConnection:
                 database=self.config["database"],
             )
         return self._connection
+
+    def reconnect(self):
+        """Force a fresh connection, closing any existing one."""
+        self.close()
+        return self.connect()
 
     @contextmanager
     def cursor(self, dict_cursor=True):
