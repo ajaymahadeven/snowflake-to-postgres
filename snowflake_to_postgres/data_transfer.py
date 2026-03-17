@@ -94,11 +94,17 @@ class DataTransferEngine:
         target_table: Optional[str] = None,
         where_clause: Optional[str] = None,
         limit: Optional[int] = None,
+        start_offset: int = 0,
         progress_callback: Optional[Callable[[int], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
+        checkpoint_callback: Optional[Callable[[int], None]] = None,
     ) -> TransferStats:
         """
         Transfer data from a Snowflake table to PostgreSQL.
+
+        start_offset: number of rows already committed (checkpoint resume).
+                      The query will be issued with OFFSET start_offset so
+                      previously transferred rows are skipped.
         """
         target_table = target_table or source_table
         start_time = datetime.now()
@@ -114,6 +120,10 @@ class DataTransferEngine:
                 query += f" WHERE {where_clause}"
             if limit:
                 query += f" LIMIT {limit}"
+            if start_offset:
+                query = _build_resume_query(query, start_offset)
+                if status_callback:
+                    status_callback(f"Resuming from row {start_offset:,}")
 
             logger.info(
                 f"Starting transfer: {source_schema}.{source_table} -> {target_schema}.{target_table}"
@@ -135,6 +145,8 @@ class DataTransferEngine:
                     target_table,
                     progress_callback,
                     status_callback,
+                    checkpoint_callback,
+                    start_offset,
                 )
             else:
                 rows_transferred = self._transfer_using_insert(
@@ -144,8 +156,11 @@ class DataTransferEngine:
                     target_table,
                     progress_callback,
                     status_callback,
+                    checkpoint_callback,
+                    start_offset,
                 )
 
+            rows_transferred += start_offset  # include already-committed rows in total
             end_time = datetime.now()
             transfer_time = (end_time - start_time).total_seconds()
             rows_per_second = (
@@ -187,6 +202,8 @@ class DataTransferEngine:
         target_table: str,
         progress_callback: Optional[Callable[[int], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
+        checkpoint_callback: Optional[Callable[[int], None]] = None,
+        start_offset: int = 0,
     ) -> int:
         """Transfer using PostgreSQL COPY protocol for maximum speed."""
         total_rows = 0
@@ -316,6 +333,9 @@ class DataTransferEngine:
 
                     total_rows += len(rows)
 
+                    if checkpoint_callback:
+                        checkpoint_callback(start_offset + total_rows)
+
                     if progress_callback:
                         progress_callback(total_rows)
 
@@ -343,6 +363,8 @@ class DataTransferEngine:
         target_table: str,
         progress_callback: Optional[Callable[[int], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
+        checkpoint_callback: Optional[Callable[[int], None]] = None,
+        start_offset: int = 0,
     ) -> int:
         """Transfer using batch INSERT statements."""
         total_rows = 0
@@ -446,6 +468,9 @@ class DataTransferEngine:
 
                     total_rows += len(rows)
 
+                    if checkpoint_callback:
+                        checkpoint_callback(start_offset + total_rows)
+
                     if progress_callback:
                         progress_callback(total_rows)
 
@@ -487,6 +512,7 @@ class DataTransferEngine:
         where_clause: Optional[str] = None,
         limit: Optional[int] = None,
         workers: int = 1,
+        checkpoint=None,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
         row_progress_callback: Optional[Callable[[int], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
@@ -494,9 +520,9 @@ class DataTransferEngine:
         """
         Transfer all tables in a schema.
 
-        When workers > 1 each table is transferred in a separate thread, each
-        with its own Snowflake connection.  Output is prefixed with the table
-        name so interleaved lines remain readable.
+        checkpoint: optional CheckpointManager.  Completed tables are skipped;
+                    interrupted tables resume from their last committed row.
+        workers:    number of parallel threads (each gets its own SF connection).
         """
         from .connections import SnowflakeConnection  # local import avoids circular dep
 
@@ -507,27 +533,53 @@ class DataTransferEngine:
             table_filter_lower = [t.lower() for t in table_filter]
             tables = [t for t in tables if t in table_filter_lower]
 
+        # Skip already-completed tables
+        if checkpoint:
+            skipped = [t for t in tables if checkpoint.is_completed(t)]
+            if skipped and status_callback:
+                status_callback(
+                    f"Checkpoint: skipping {len(skipped)} already-completed table(s): "
+                    + ", ".join(skipped)
+                )
+            tables = [t for t in tables if not checkpoint.is_completed(t)]
+
         total_tables = len(tables)
+
+        def _make_checkpoint_cb(table):
+            if checkpoint:
+                return lambda rows: checkpoint.update_progress(table, rows)
+            return None
+
+        def _on_table_done(table, stats):
+            if checkpoint and stats.success:
+                checkpoint.mark_completed(table)
 
         if workers <= 1:
             stats_list = []
             for i, table in enumerate(tables, 1):
                 if progress_callback:
                     progress_callback(table, i, total_tables)
+                start_offset = checkpoint.get_offset(table) if checkpoint else 0
+                if start_offset and status_callback:
+                    status_callback(
+                        f"Resuming {table} from row {start_offset:,} (checkpoint)"
+                    )
                 stats = self.transfer_table(
                     source_schema=source_schema,
                     source_table=table,
                     target_schema=target_schema,
                     where_clause=where_clause,
                     limit=limit,
+                    start_offset=start_offset,
                     progress_callback=row_progress_callback,
                     status_callback=status_callback,
+                    checkpoint_callback=_make_checkpoint_cb(table),
                 )
+                _on_table_done(table, stats)
                 stats_list.append(stats)
             return stats_list
 
         # --- Parallel path ---
-        # Each worker gets its own SnowflakeConnection cloned from the primary.
         sf_config = self.sf_conn.config
         _print_lock = threading.Lock()
 
@@ -544,6 +596,11 @@ class DataTransferEngine:
         completed_count = [0]
 
         def _transfer_one(table):
+            start_offset = checkpoint.get_offset(table) if checkpoint else 0
+            if start_offset:
+                _prefixed_status(
+                    table, f"Resuming from row {start_offset:,} (checkpoint)"
+                )
             sf_conn = SnowflakeConnection(sf_config)
             engine = DataTransferEngine(
                 sf_conn, self.pg_conn, self.batch_size, self.use_copy
@@ -555,11 +612,15 @@ class DataTransferEngine:
                     target_schema=target_schema,
                     where_clause=where_clause,
                     limit=limit,
+                    start_offset=start_offset,
                     progress_callback=lambda n: _prefixed_row_progress(table, n),
                     status_callback=lambda m: _prefixed_status(table, m),
+                    checkpoint_callback=_make_checkpoint_cb(table),
                 )
             finally:
                 sf_conn.close()
+
+            _on_table_done(table, stats)
 
             with _print_lock:
                 completed_count[0] += 1

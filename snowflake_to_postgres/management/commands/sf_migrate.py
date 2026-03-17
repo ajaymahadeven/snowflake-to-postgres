@@ -12,6 +12,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
+from ...checkpoint import CheckpointManager
 from ...connections import PostgresConnection, SnowflakeConnection
 from ...data_transfer import DataTransferEngine
 from ...discovery import SnowflakeSchemaDiscovery
@@ -125,6 +126,16 @@ Examples:
             default=1,
             help="Number of parallel table-transfer workers (default: 1). "
             "Each worker uses its own Snowflake connection.",
+        )
+
+        # Checkpoint file for resumable transfers
+        parser.add_argument(
+            "--checkpoint",
+            type=str,
+            metavar="FILE",
+            help="Path to checkpoint JSON file.  Completed tables are skipped on "
+            "restart; interrupted tables resume from the last committed row. "
+            "Example: --checkpoint checkpoints/my_schema.json",
         )
 
         # WHERE clause for filtering data
@@ -566,6 +577,7 @@ Examples:
         table_filter = [options["table"]] if options.get("table") else None
         where_clause = options.get("where")
         limit = options.get("limit")
+        checkpoint_path = options.get("checkpoint")
 
         self.stdout.write(
             self.style.WARNING(f"Transferring data: {source_schema} -> {target_schema}")
@@ -576,6 +588,23 @@ Examples:
             self.stdout.write(f"  WHERE: {where_clause}")
         if limit:
             self.stdout.write(f"  LIMIT: {limit:,}")
+
+        checkpoint = None
+        if checkpoint_path:
+            Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
+            checkpoint = CheckpointManager(
+                checkpoint_path,
+                source_schema=source_schema,
+                target_schema=target_schema,
+            )
+            summary = checkpoint.summary()
+            self.stdout.write(
+                self.style.HTTP_INFO(
+                    f"  Checkpoint: {checkpoint_path} "
+                    f"({summary['completed']} completed, "
+                    f"{summary['in_progress']} in-progress)"
+                )
+            )
 
         # Scale PG pool to match worker count (plus a small buffer)
         pg_max_conn = max(5, workers + 2)
@@ -594,6 +623,7 @@ Examples:
                 where_clause=where_clause,
                 limit=limit,
                 workers=workers,
+                checkpoint=checkpoint,
                 progress_callback=self._create_transfer_progress_callback(),
                 row_progress_callback=self._create_row_progress_callback(),
                 status_callback=self._create_status_callback(),
