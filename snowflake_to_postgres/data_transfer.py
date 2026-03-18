@@ -45,7 +45,8 @@ def _build_resume_query(original_query: str, offset: int) -> str:
             r"\bLIMIT\s+\d+", f"LIMIT {new_limit}", original_query, flags=_re.IGNORECASE
         )
         return f"{query} OFFSET {offset}"
-    return f"{original_query} OFFSET {offset}"
+    # Snowflake requires LIMIT before OFFSET — use a max-int sentinel
+    return f"{original_query} LIMIT 2147483647 OFFSET {offset}"
 
 
 @dataclass
