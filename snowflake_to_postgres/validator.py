@@ -502,8 +502,11 @@ class DataValidator:
         if not row:
             return []
 
-        min_d = row["MIN_D"]
-        max_d = row["MAX_D"]
+        # Use positional access to avoid case-sensitivity issues with aliases
+        # (Snowflake DictCursor may return lowercase keys for expression aliases)
+        values = list(row.values()) if isinstance(row, dict) else row
+        min_d = values[0]
+        max_d = values[1]
 
         if min_d is None or max_d is None:
             return []
