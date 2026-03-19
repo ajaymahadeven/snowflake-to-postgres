@@ -517,11 +517,19 @@ class DataValidator:
         if hasattr(max_d, "date"):
             max_d = max_d.date()
 
+        # Cap max_d to avoid overflow when computing next month (e.g. sentinel dates like 9999-12-31)
+        _DATE_MAX = date(9999, 12, 31)
+        if max_d >= _DATE_MAX:
+            max_d = _DATE_MAX
+
         chunks: List[Tuple] = []
         current = date(min_d.year, min_d.month, 1)
         while current <= max_d:
-            # Compute first day of next month
-            if current.month == 12:
+            # Compute first day of next month, stopping at the Python date ceiling
+            if current.year == 9999 and current.month == 12:
+                chunks.append((current, _DATE_MAX))
+                break
+            elif current.month == 12:
                 next_month = date(current.year + 1, 1, 1)
             else:
                 next_month = date(current.year, current.month + 1, 1)
