@@ -36,17 +36,21 @@ def _build_resume_query(original_query: str, offset: int) -> str:
     """
     import re as _re
 
-    upper = original_query.upper()
-    limit_match = _re.search(r"\bLIMIT\s+(\d+)", upper)
+    # Strip any existing OFFSET clause so we never produce double-OFFSET SQL
+    # (can happen when the query was already built with a checkpoint offset and
+    # then we reconnect mid-stream and call this function again).
+    query = _re.sub(r"\s+OFFSET\s+\d+", "", original_query, flags=_re.IGNORECASE).rstrip()
+
+    limit_match = _re.search(r"\bLIMIT\s+(\d+)", query, flags=_re.IGNORECASE)
     if limit_match:
         original_limit = int(limit_match.group(1))
         new_limit = max(original_limit - offset, 0)
         query = _re.sub(
-            r"\bLIMIT\s+\d+", f"LIMIT {new_limit}", original_query, flags=_re.IGNORECASE
+            r"\bLIMIT\s+\d+", f"LIMIT {new_limit}", query, flags=_re.IGNORECASE
         )
         return f"{query} OFFSET {offset}"
     # Snowflake requires LIMIT before OFFSET — use a max-int sentinel
-    return f"{original_query} LIMIT 2147483647 OFFSET {offset}"
+    return f"{query} LIMIT 2147483647 OFFSET {offset}"
 
 
 @dataclass
