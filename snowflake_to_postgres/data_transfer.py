@@ -36,12 +36,14 @@ def _build_resume_query(original_query: str, offset: int) -> str:
     """
     import re as _re
 
-    # Strip any existing OFFSET clause so we never produce double-OFFSET SQL
-    # (can happen when the query was already built with a checkpoint offset and
-    # then we reconnect mid-stream and call this function again).
-    query = _re.sub(r"\s+OFFSET\s+\d+", "", original_query, flags=_re.IGNORECASE).rstrip()
+    # Strip any existing OFFSET clause (from a previous resume) before rebuilding.
+    # This prevents duplicate OFFSET clauses when reconnecting more than once.
+    query = _re.sub(
+        r"\s+OFFSET\s+\d+\s*$", "", original_query, flags=_re.IGNORECASE
+    ).rstrip()
 
-    limit_match = _re.search(r"\bLIMIT\s+(\d+)", query, flags=_re.IGNORECASE)
+    upper = query.upper()
+    limit_match = _re.search(r"\bLIMIT\s+(\d+)", upper)
     if limit_match:
         original_limit = int(limit_match.group(1))
         new_limit = max(original_limit - offset, 0)
