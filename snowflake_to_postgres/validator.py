@@ -112,9 +112,22 @@ class DataValidator:
         numeric_cols = self._get_numeric_columns(columns)
 
         # Determine chunks for Layers 2 and 4
+        _MAX_CHUNKS = 1200  # 100 years — beyond this, chunking causes more harm than good
         if self.chunk_date_ranges and date_col:
             chunks = self._get_date_chunks(sf_schema, sf_table, date_col)
-            if chunks:
+            if chunks and len(chunks) > _MAX_CHUNKS:
+                self._status(
+                    f"  Skipping chunking: {len(chunks)} monthly windows exceeds limit "
+                    f"({_MAX_CHUNKS}) — likely sentinel dates in '{date_col}'. "
+                    f"Using single full-table query instead."
+                )
+                logger.warning(
+                    "%s.%s: %d chunks exceeds _MAX_CHUNKS=%d (date_col=%s); "
+                    "falling back to unchunked queries",
+                    sf_schema, sf_table, len(chunks), _MAX_CHUNKS, date_col,
+                )
+                chunks = None
+            elif chunks:
                 self._status(f"  Chunking into {len(chunks)} monthly windows...")
             else:
                 chunks = None
