@@ -220,7 +220,16 @@ class DataValidator:
         if chunks:
             sf_counts: Dict[str, int] = {}
             pg_counts: Dict[str, int] = {}
-            for chunk_start, chunk_end in chunks:
+            total = len(chunks)
+            for idx, (chunk_start, chunk_end) in enumerate(chunks):
+                if idx % 50 == 0:
+                    logger.debug(
+                        "partition_counts chunk %d/%d  %s – %s",
+                        idx + 1, total, chunk_start, chunk_end,
+                    )
+                    self._status(
+                        f"    [chunk {idx+1}/{total}] {chunk_start} – {chunk_end}"
+                    )
                 sf_counts.update(
                     self._sf_group_count(
                         sf_schema,
@@ -329,7 +338,16 @@ class DataValidator:
         if chunks:
             sf_aggs: Dict[str, Dict[int, Any]] = {}
             pg_aggs: Dict[str, Dict[int, Any]] = {}
-            for chunk_start, chunk_end in chunks:
+            total = len(chunks)
+            for idx, (chunk_start, chunk_end) in enumerate(chunks):
+                if idx % 50 == 0:
+                    logger.debug(
+                        "aggregate_fingerprint chunk %d/%d  %s – %s",
+                        idx + 1, total, chunk_start, chunk_end,
+                    )
+                    self._status(
+                        f"    [chunk {idx+1}/{total}] {chunk_start} – {chunk_end}"
+                    )
                 sf_aggs.update(
                     self._sf_aggregates_by_date(
                         sf_schema,
