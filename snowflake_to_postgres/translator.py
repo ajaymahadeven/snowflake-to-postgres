@@ -141,7 +141,7 @@ class PostgresDDLGenerator:
                 f'    CONSTRAINT "{constraint.name}" UNIQUE ({unique_cols})'
             )
 
-        table_ddl = f'CREATE TABLE {schema}."{table.name}" (\n'
+        table_ddl = f'CREATE TABLE IF NOT EXISTS {schema}."{table.name}" (\n'
         table_ddl += ",\n".join(columns_ddl)
         table_ddl += "\n);"
 

@@ -51,8 +51,10 @@ def _build_resume_query(original_query: str, offset: int) -> str:
             r"\bLIMIT\s+\d+", f"LIMIT {new_limit}", query, flags=_re.IGNORECASE
         )
         return f"{query} OFFSET {offset}"
-    # Snowflake requires LIMIT before OFFSET — use a max-int sentinel
-    return f"{query} LIMIT 2147483647 OFFSET {offset}"
+    # Snowflake requires LIMIT before OFFSET — use a 64-bit safe sentinel.
+    # 2147483647 (INT32 max) would silently truncate tables larger than 2B rows;
+    # use INT64 max instead.
+    return f"{query} LIMIT 9223372036854775807 OFFSET {offset}"
 
 
 @dataclass
@@ -305,7 +307,11 @@ class DataTransferEngine:
                             sf_cursor.close()
                             sf_conn = self.sf_conn.reconnect()
                             sf_cursor = sf_conn.cursor()
-                            resume_query = _build_resume_query(query, total_rows)
+                            # Resume from the absolute table position: rows already committed
+                            # in prior runs (start_offset) plus rows committed this session
+                            # (total_rows). Using only total_rows would re-insert rows from
+                            # prior runs, causing duplicates.
+                            resume_query = _build_resume_query(query, start_offset + total_rows)
                             sf_cursor.execute(resume_query)
                             continue
                         raise
@@ -454,7 +460,8 @@ class DataTransferEngine:
                             sf_cursor.close()
                             sf_conn = self.sf_conn.reconnect()
                             sf_cursor = sf_conn.cursor()
-                            resume_query = _build_resume_query(query, total_rows)
+                            # Resume from absolute table position: prior runs + this session.
+                            resume_query = _build_resume_query(query, start_offset + total_rows)
                             sf_cursor.execute(resume_query)
                             continue
                         raise

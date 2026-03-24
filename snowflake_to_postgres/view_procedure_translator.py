@@ -315,6 +315,28 @@ class SnowflakeViewTranslator:
         for pattern, replacement in replacements.items():
             result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
 
+        # TO_TIMESTAMP(col) with a single argument is invalid in PostgreSQL when
+        # the argument is a text column (Snowflake auto-detects format; PG requires
+        # an explicit format string). Add a default ISO format for simple column refs.
+        # Adjust the format string manually if the source data uses a different layout.
+        result = re.sub(
+            r"\bTO_TIMESTAMP\(\s*(\w+(?:\.\w+)?)\s*\)(?!\s*,)",
+            r"TO_TIMESTAMP(\1, 'YYYY-MM-DD HH24:MI:SS')",
+            result,
+            flags=re.IGNORECASE,
+        )
+
+        # In PostgreSQL, trim() has the implicit column alias 'btrim'. When multiple
+        # trim() calls appear in a SELECT list without aliases, every column ends up
+        # named 'btrim', causing "column specified more than once" errors. Add the
+        # source column name as an explicit alias for simple trim(column_name) calls.
+        result = re.sub(
+            r"\btrim\((\w+)\)(?!\s+AS\b)(?=\s*(?:,|\r?\n|$|--|\bFROM\b|\bWHERE\b|\bORDER\b|\bGROUP\b|\bHAVING\b|\bLIMIT\b))",
+            r"trim(\1) AS \1",
+            result,
+            flags=re.IGNORECASE,
+        )
+
         return result
 
 
