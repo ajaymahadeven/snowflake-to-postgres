@@ -121,7 +121,11 @@ class DataTransferEngine:
         try:
             # Get column list
             columns = self._get_columns(source_schema, source_table)
-            column_list = ", ".join([f'"{col}"' for col in columns])
+            # Cast every column to VARCHAR in Snowflake so the connector's C-level
+            # type converter never sees oversized numerics/VARIANTs that cause
+            # errno 75 (EOVERFLOW) in the 252005 "Failed to convert current row" error.
+            # This is safe because _transfer_using_copy converts everything to str anyway.
+            column_list = ", ".join([f'"{col}"::VARCHAR AS "{col}"' for col in columns])
 
             # Build SELECT query
             query = f"SELECT {column_list} FROM {source_schema}.{source_table}"
