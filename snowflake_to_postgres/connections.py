@@ -52,6 +52,12 @@ class SnowflakeConnection:
                 warehouse=self.config["warehouse"],
                 database=self.config["database"],
             )
+            # Force JSON result format so the Arrow C extension never tries to
+            # deserialize oversized values (large VARCHAR/VARIANT/DECIMAL),
+            # which causes errno 75 "Value too large for defined data type".
+            self._connection.cursor().execute(
+                "ALTER SESSION SET PYTHON_CONNECTOR_QUERY_RESULT_FORMAT = 'JSON'"
+            )
         return self._connection
 
     def reconnect(self):
