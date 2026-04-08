@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 import snowflake.connector
 from django.conf import settings
 from psycopg2.extras import RealDictCursor
-from psycopg2.pool import SimpleConnectionPool
+from psycopg2.pool import ThreadedConnectionPool
 from snowflake.connector import DictCursor
 
 
@@ -114,7 +114,7 @@ class PostgresConnection:
     def get_pool(self):
         """Get or create connection pool."""
         if self._pool is None:
-            self._pool = SimpleConnectionPool(
+            self._pool = ThreadedConnectionPool(
                 self.min_conn, self.max_conn, **self.config
             )
         return self._pool
