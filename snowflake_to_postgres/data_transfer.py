@@ -311,7 +311,9 @@ class DataTransferEngine:
                             # in prior runs (start_offset) plus rows committed this session
                             # (total_rows). Using only total_rows would re-insert rows from
                             # prior runs, causing duplicates.
-                            resume_query = _build_resume_query(query, start_offset + total_rows)
+                            resume_query = _build_resume_query(
+                                query, start_offset + total_rows
+                            )
                             sf_cursor.execute(resume_query)
                             continue
                         raise
@@ -334,8 +336,15 @@ class DataTransferEngine:
                         # None  → \N  (unquoted by QUOTE_MINIMAL) → COPY NULL '\N' → DB NULL
                         # ''    → ''  (unquoted empty)             → PG stores as ''  (not NULL)
                         # other → str(val) as normal CSV field
+                        # Null bytes (\x00) are not valid in PG text columns and cause
+                        # psycopg2's copy_expert to segfault at the C level — strip them.
                         clean_row = [
-                            _NULL_MARKER if val is None else str(val) for val in row
+                            (
+                                _NULL_MARKER
+                                if val is None
+                                else str(val).replace("\x00", "")
+                            )
+                            for val in row
                         ]
                         writer.writerow(clean_row)
 
@@ -461,7 +470,9 @@ class DataTransferEngine:
                             sf_conn = self.sf_conn.reconnect()
                             sf_cursor = sf_conn.cursor()
                             # Resume from absolute table position: prior runs + this session.
-                            resume_query = _build_resume_query(query, start_offset + total_rows)
+                            resume_query = _build_resume_query(
+                                query, start_offset + total_rows
+                            )
                             sf_cursor.execute(resume_query)
                             continue
                         raise
